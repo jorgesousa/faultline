@@ -1,4 +1,4 @@
-import { VS, MAT_RGB, MAT_PAT } from './world.js';
+import { VS, MAT_RGB, MAT_PAT, MAT_THIN } from './world.js';
 
 const AO_CURVE = [0.45, 0.65, 0.82, 1.0];
 const FACES = [];
@@ -20,7 +20,28 @@ function noise(x, y, z) {
 export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, px, py, pz) {
   const pos = [], nor = [], col = [], tp = [], idx = [];
   const p = [0, 0, 0], q = [0, 0, 0], vp = [0, 0, 0], ao = [0, 0, 0, 0];
-  const solid = (r) => (get(r[0], r[1], r[2]) ? 1 : 0);
+  // thin voxels (cables) don't hide or shade their neighbours
+  const opaque = (x, y, z) => { const m = get(x, y, z); return m && !MAT_THIN[m] ? 1 : 0; };
+  const solid = (r) => opaque(r[0], r[1], r[2]);
+  // axis-aligned box in voxel units, flat shaded
+  const box = (ax, ay, az, bx, by, bz, rgb, pat) => {
+    const lo = [ax, ay, az], hi = [bx, by, bz];
+    for (const f of FACES) {
+      const start = pos.length / 3;
+      for (let c = 0; c < 4; c++) {
+        vp[f.a] = f.s > 0 ? hi[f.a] : lo[f.a];
+        vp[f.u] = CORNERS[c][0] ? hi[f.u] : lo[f.u];
+        vp[f.v] = CORNERS[c][1] ? hi[f.v] : lo[f.v];
+        pos.push(vp[0] * VS + px, vp[1] * VS + py, vp[2] * VS + pz);
+        tp.push(vp[0] + nox, vp[1] + noy, vp[2] + noz, pat);
+        nor.push(f.a === 0 ? f.s : 0, f.a === 1 ? f.s : 0, f.a === 2 ? f.s : 0);
+        col.push(rgb[0], rgb[1], rgb[2]);
+      }
+      if (f.s > 0) idx.push(start, start + 1, start + 2, start, start + 2, start + 3);
+      else idx.push(start, start + 2, start + 1, start, start + 3, start + 2);
+    }
+  };
+  const T = 0.11; // half thickness of a cable, in voxels
 
   for (let y = y0; y < y1; y++)
     for (let z = z0; z < z1; z++)
@@ -28,12 +49,31 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
         const m = get(x, y, z);
         if (!m) continue;
         const base = MAT_RGB[m], pat = MAT_PAT[m];
+        if (MAT_THIN[m]) {
+          // a rod along each axis that has a neighbour, reaching into that neighbour's face
+          const c0 = 0.5 - T, c1 = 0.5 + T;
+          let any = false;
+          for (let a = 0; a < 3; a++) {
+            p[0] = x; p[1] = y; p[2] = z; p[a] -= 1;
+            const lo = get(p[0], p[1], p[2]) ? 0 : c0;
+            p[a] += 2;
+            const hi = get(p[0], p[1], p[2]) ? 1 : c1;
+            if (lo === c0 && hi === c1) continue;
+            any = true;
+            const l = [x + c0, y + c0, z + c0], h = [x + c1, y + c1, z + c1];
+            l[a] = (a === 0 ? x : a === 1 ? y : z) + lo;
+            h[a] = (a === 0 ? x : a === 1 ? y : z) + hi;
+            box(l[0], l[1], l[2], h[0], h[1], h[2], base, pat);
+          }
+          if (!any) box(x + c0, y + c0, z + c0, x + c1, y + c1, z + c1, base, pat);
+          continue;
+        }
         // patterned materials get their variation from the shader, so keep the per-voxel tint subtle
         const shade = (pat >= 1 && pat <= 5) || pat === 8 || pat === 9 || pat === 13 ? 0.94 + 0.06 * noise(x + nox, y + noy, z + noz) : 0.86 + 0.14 * noise(x + nox, y + noy, z + noz);
         for (const f of FACES) {
           p[0] = x; p[1] = y; p[2] = z;
           p[f.a] += f.s;
-          if (get(p[0], p[1], p[2])) continue;
+          if (opaque(p[0], p[1], p[2])) continue;
           const start = pos.length / 3;
           for (let c = 0; c < 4; c++) {
             const cu = CORNERS[c][0], cv = CORNERS[c][1];

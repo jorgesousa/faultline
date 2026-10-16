@@ -264,18 +264,152 @@ function tree(w, x, z, h = 18, r = 6, base = G) {
   w.fill(x, base, z, x + 2, base + h, z + 2, M.wood);
 }
 
-// 16 × 7 voxel hatchback (4 × 1.75 m) standing on y = base
+// vehicle builder: a is along the length (0 = front), b across, y up; mirrored when alongX is false
+const vbox = (w, x, z, alongX) => (a0, y0, b0, a1, y1, b1, m) =>
+  alongX ? w.fill(x + a0, y0, z + b0, x + a1, y1, z + b1, m) : w.fill(x + b0, y0, z + a0, x + b1, y1, z + a1, m);
+function wheels(box, base, D, at) {
+  for (const a of at) for (const b of [0, D - 1]) {
+    box(a, base, b, a + 3, base + 3, b + 1, M.tyre);
+    box(a + 1, base + 1, b, a + 2, base + 2, b + 1, M.metal); // hub
+  }
+}
+
+// 16 × 7 voxel hatchback (4 × 1.75 m) standing on y = base: wheel arches, sloped windscreen, lights, mirrors, seats
 function car(w, x, z, alongX, paint, base = G) {
-  const L = 16, D = 7;
-  const box = (a0, y0, b0, a1, y1, b1, m) =>
-    alongX ? w.fill(x + a0, y0, z + b0, x + a1, y1, z + b1, m) : w.fill(x + b0, y0, z + a0, x + b1, y1, z + a1, m);
-  box(0, base + 1, 1, L, base + 5, D - 1, paint);
-  box(3, base + 5, 1, L - 2, base + 8, D - 1, M.glass);
-  box(4, base + 5, 2, L - 3, base + 8, D - 2, 0);
-  box(3, base + 8, 1, L - 2, base + 9, D - 1, paint);
-  for (const a of [2, L - 5]) for (const b of [0, D - 1]) box(a, base, b, a + 3, base + 3, b + 1, M.tyre);
-  box(0, base + 3, 1, 1, base + 4, 2, M.glass); // headlights
-  box(0, base + 3, D - 2, 1, base + 4, D - 1, M.glass);
+  const L = 16, D = 7, box = vbox(w, x, z, alongX);
+  box(0, base + 1, 0, L, base + 4, D, paint); // lower body
+  for (const a of [0, L - 1]) for (const b of [0, D - 1]) box(a, base + 1, b, a + 1, base + 4, b + 1, 0); // rounded corners
+  box(0, base + 3, 0, 1, base + 4, D, 0); // nose slopes down to the bumper
+  box(0, base + 1, 1, 1, base + 2, D - 1, M.tyre); // bumpers
+  box(L - 1, base + 1, 1, L, base + 2, D - 1, M.tyre);
+  box(0, base + 2, 2, 1, base + 3, D - 2, M.metal); // grille
+  for (const b of [1, D - 2]) {
+    box(0, base + 2, b, 1, base + 3, b + 1, M.headlamp);
+    box(L - 1, base + 3, b, L, base + 4, b + 1, M.taillamp);
+  }
+  box(L - 1, base + 2, 2, L, base + 3, D - 2, M.plate);
+  for (const b of [0, D - 1]) box(1, base + 1, b, L - 1, base + 2, b + 1, 0); // tucked-in sills
+  box(1, base + 1, 1, L - 1, base + 2, 2, M.tyre);
+  box(1, base + 1, D - 2, L - 1, base + 2, D - 1, M.tyre);
+  box(5, base + 2, 1, L - 2, base + 4, D - 1, 0); // cabin
+  box(5, base + 3, 1, 6, base + 4, D - 1, M.tyre); // dashboard
+  for (const [a0, a1] of [[8, 10], [11, 13]]) {
+    box(a0, base + 2, 2, a1, base + 3, D - 2, M.tyre); // seats
+    box(a1 - 1, base + 3, 2, a1, base + 5, D - 2, M.tyre);
+  }
+  // glasshouse set in one voxel from the shoulders: raked windscreen, side windows with pillars, roof
+  box(4, base + 4, 1, L - 1, base + 6, D - 1, M.glass);
+  box(5, base + 4, 2, L - 2, base + 6, D - 2, 0);
+  box(4, base + 5, 1, 5, base + 6, D - 1, 0);
+  box(5, base + 5, 2, 6, base + 6, D - 2, M.glass);
+  for (const a of [4, 9, L - 2]) for (const b of [1, D - 2]) box(a, base + 4, b, a + 1, base + 6 - (a === 4 ? 1 : 0), b + 1, paint);
+  box(5, base + 6, 1, L - 1, base + 7, D - 1, paint); // roof
+  for (const b of [0, D - 1]) box(5, base + 4, b, 6, base + 5, b + 1, paint); // mirrors on the shoulders
+  wheels(box, base, D, [2, L - 5]);
+}
+
+// 20 × 8 voxel delivery van (5 × 2 m): cab with a raked windscreen and a tall cargo box
+function van(w, x, z, alongX, paint, stripe, base = G) {
+  const L = 20, D = 8, box = vbox(w, x, z, alongX);
+  box(0, base + 1, 0, 5, base + 5, D, paint); // cab
+  for (const b of [0, D - 1]) box(0, base + 1, b, 1, base + 5, b + 1, 0);
+  box(0, base + 4, 0, 1, base + 5, D, 0);
+  box(0, base + 1, 1, 1, base + 2, D - 1, M.tyre);
+  box(0, base + 2, 2, 1, base + 4, D - 2, M.metal);
+  for (const b of [1, D - 2]) box(0, base + 2, b, 1, base + 4, b + 1, M.headlamp);
+  box(0, base + 2, 3, 1, base + 3, 5, M.plate);
+  for (let k = 0; k < 4; k++) {
+    box(1 + k, base + 5 + k, 0, 5, base + 6 + k, D, M.glass);
+    box(2 + k, base + 5 + k, 1, 5, base + 6 + k, D - 1, 0);
+  }
+  box(2, base + 2, 1, 5, base + 5, D - 1, 0);
+  box(2, base + 2, 1, 3, base + 4, D - 1, M.tyre); // dashboard
+  box(3, base + 2, 1, 5, base + 3, D - 1, M.tyre); // seats
+  box(4, base + 9, 0, 5, base + 10, D, paint);
+  for (const b of [-1, D]) box(2, base + 6, b, 3, base + 8, b + 1, M.tyre); // mirrors
+  // cargo box with a side stripe and rear doors
+  box(5, base + 1, 0, L, base + 10, D, paint);
+  box(6, base + 2, 1, L - 1, base + 9, D - 1, 0);
+  box(6, base + 5, 0, L - 1, base + 6, D, stripe);
+  box(6, base + 5, 1, L - 1, base + 6, D - 1, 0);
+  box(L - 1, base + 1, 1, L, base + 2, D - 1, M.tyre);
+  box(L - 1, base + 2, 3, L, base + 3, 5, M.plate);
+  box(L - 1, base + 7, 4, L, base + 8, 5, M.metal); // door handle
+  for (const b of [0, D - 1]) box(L - 1, base + 3, b, L, base + 5, b + 1, M.taillamp);
+  for (const b of [0, D - 1]) box(1, base + 1, b, L - 1, base + 2, b + 1, 0); // tucked-in sills
+  for (const b of [1, D - 2]) box(1, base + 1, b, L - 1, base + 2, b + 1, M.tyre);
+  wheels(box, base, D, [2, L - 5]);
+}
+
+// wooden utility pole with a crossarm across the wire run; returns the three wire attachment points
+function utilityPole(w, x, z, alongX, base = G + 1, h = 34) {
+  const top = base + h - 1;
+  w.fill(x, base, z, x + 1, top + 1, z + 1, M.wood);
+  const ca = alongX ? (d) => [x, z + d] : (d) => [x + d, z];
+  for (let d = -3; d <= 3; d++) { const [cx, cz] = ca(d); w.fill(cx, top - 2, cz, cx + 1, top - 1, cz + 1, M.wood); }
+  for (const d of [-3, 3]) { const [cx, cz] = ca(d); w.fill(cx, top - 1, cz, cx + 1, top, cz + 1, M.metal); } // insulators
+  return [[...ca(-3), top - 1], [x, z, top], [...ca(3), top - 1]].map(([px, pz, py]) => [px, py, pz]);
+}
+
+// Wires laid by the current map, in world voxel coordinates: the renderer draws each one as a smooth
+// curve while all its voxels are intact, and falls back to the voxel rods once it is damaged.
+export const WIRES = [];
+
+// sagging cable between two points, laid one axis step at a time so it stays face-connected
+function wire(w, p, q, sag) {
+  const n = Math.max(Math.abs(q[0] - p[0]), Math.abs(q[2] - p[2]), 1) * 2;
+  const cur = [...p];
+  const ox = w.ox ?? 0, oz = w.oz ?? 0, cells = [];
+  const put = () => {
+    if (w.get(cur[0], cur[1], cur[2])) return;
+    w.set(cur[0], cur[1], cur[2], M.cable);
+    cells.push([cur[0] + ox, cur[1], cur[2] + oz]);
+  };
+  WIRES.push({ p: [p[0] + ox, p[1], p[2] + oz], q: [q[0] + ox, q[1], q[2] + oz], sag, cells });
+  put();
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    const tgt = [Math.round(p[0] + (q[0] - p[0]) * t), Math.round(p[1] + (q[1] - p[1]) * t - sag * 4 * t * (1 - t)), Math.round(p[2] + (q[2] - p[2]) * t)];
+    for (const a of [0, 2, 1]) while (cur[a] !== tgt[a]) { cur[a] += Math.sign(tgt[a] - cur[a]); put(); }
+  }
+}
+// run cables between consecutive poles, from one attachment to the matching one on the next pole
+function wireRun(w, poles, alongX, sag = 4) {
+  for (let i = 0; i + 1 < poles.length; i++)
+    for (let k = 0; k < 3; k++) {
+      const a = [...poles[i][k]], b = [...poles[i + 1][k]];
+      a[alongX ? 0 : 2] += 1; b[alongX ? 0 : 2] -= 1;
+      wire(w, a, b, sag);
+    }
+}
+
+// 24 × 10 × 10 voxel shipping container (6 × 2.5 × 2.5 m) with corner posts and end doors
+function container(w, x, z, alongX, mat, base = G, open = false) {
+  const L = 24, D = 10, H = 10, box = vbox(w, x, z, alongX);
+  box(0, base, 0, L, base + H, D, mat);
+  box(1, base + 1, 1, L - 1, base + H - 1, D - 1, 0);
+  box(1, base, 1, L - 1, base + 1, D - 1, M.planks);
+  for (const a of [0, L - 1]) for (const b of [0, D - 1]) box(a, base, b, a + 1, base + H, b + 1, M.metal);
+  for (const b of [0, D - 1]) { box(0, base, b, L, base + 1, b + 1, M.metal); box(0, base + H - 1, b, L, base + H, b + 1, M.metal); }
+  if (open) {
+    box(L - 1, base + 1, 5, L, base + H - 1, D - 1, 0);
+    box(L, base + 1, D - 1, L + 4, base + H - 1, D, mat); // one door swung open
+  }
+  for (const b of open ? [2, 4] : [2, 4, 5, 7]) box(L, base + 1, b, L + 1, base + H - 1, b + 1, M.metal); // lock bars
+}
+
+// 5 × 4 voxel pallet: two runners and three deck boards
+function pallet(w, x, y, z) {
+  for (const dz of [0, 3]) w.fill(x, y, z + dz, x + 5, y + 1, z + dz + 1, M.wood);
+  for (const dx of [0, 2, 4]) w.fill(x + dx, y + 1, z, x + dx + 1, y + 2, z + 4, M.planks);
+}
+function palletStack(w, x, z, n, base = G + 1) { for (let i = 0; i < n; i++) pallet(w, x, base + 2 * i, z); }
+
+// wheelie bin (0.5 × 0.75 × 1.1 m) with its lid and wheels at the back
+function wheelieBin(w, x, z, base = G + 1, mat = M.plastic) {
+  w.fill(x, base + 1, z, x + 2, base + 4, z + 3, mat);
+  w.fill(x, base + 4, z, x + 2, base + 5, z + 3, M.tyre);
+  w.fill(x, base, z + 2, x + 2, base + 1, z + 3, M.tyre);
 }
 
 // street lamp: pole on y = base with an arm pointing (dx, dz). Returns the lamp spot.
@@ -393,7 +527,12 @@ function chimneyStack(w, x, z, y0, y1) {
 }
 
 // lets a layout written for a smaller plot sit anywhere in the world
-const shifted = (w, ox, oz) => ({ fill: (x0, y0, z0, x1, y1, z1, m) => w.fill(x0 + ox, y0, z0 + oz, x1 + ox, y1, z1 + oz, m) });
+const shifted = (w, ox, oz) => ({
+  ox, oz,
+  fill: (x0, y0, z0, x1, y1, z1, m) => w.fill(x0 + ox, y0, z0 + oz, x1 + ox, y1, z1 + oz, m),
+  get: (x, y, z) => w.get(x + ox, y, z + oz),
+  set: (x, y, z, m) => w.set(x + ox, y, z + oz, m),
+});
 const off = (list, o) => list.map(([x, y, z, ...r]) => [x + o, y, z + o, ...r]);
 
 // ---------- map: farm (the original level) ----------
@@ -421,6 +560,14 @@ function buildFarm(world) {
   const barn = { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 10, doorH: 11, winW: 2, winGap: 8, plain: true };
   building(w, 112, 26, 30, 26, 1, barn);
 
+  const farmPoles = [-39, 1, 41, 81, 121, 161, 201].map((x) => utilityPole(w, x, 62, true, G, 32));
+  wireRun(w, farmPoles, true, 4);
+  wire(w, [41, G + 31, 61], [41, G + 20, 54], 1);
+  container(w, 150, 30, true, M.container2);
+  container(w, 150, 42, true, M.container, G, true);
+  palletStack(w, 152, 54, 3, G);
+  palletStack(w, 159, 54, 1, G);
+  van(w, 100, 56, true, M.paint3, M.paint, G);
   waterTower(w, 32, 100);
   chimney(w, 118, 112);
   ruinWall(w, 62, 120, 40);
@@ -480,6 +627,7 @@ function buildRiverside(w) {
       dormers: i % 2 ? [15] : [], flowers: !brick, doorLeaf: brick ? M.paint : M.paint2,
     });
     fenceZ(w, x0, 9, 40);
+    if (i % 2 === 0) wheelieBin(w, x0 + 11, 71, G + 1, i === 2 ? M.container : M.plastic);
   });
   chimneyStack(w, 74, 52, G + 24, G + 43);
   for (const x of [44, 100, 128]) roofChimney(w, x, 55, G + 30, G + 43);
@@ -494,6 +642,16 @@ function buildRiverside(w) {
   building(w, 172, 44, 56, 26, 2, { wall: M.render2, floor: M.concrete, inner: M.plaster, win: M.pane, flip: true, shop: true, shopTop: G + 9, doorW: 6, doorH: 8 });
   signBoard(w, 174, 226, G + 9, 69, 1, 'FOOD STORE', M.sign, M.trim);
   awning(w, 174, 226, G + 8, 69, 1, 4, M.paint, M.trim);
+  // delivery yard behind the shop: containers, a van, pallets and bins
+  w.fill(172, G - 1, 10, 232, G, 44, M.asphalt);
+  container(w, 176, 13, true, M.container);
+  container(w, 178, 13, true, M.container2, G + 10);
+  container(w, 214, 12, false, M.container3, G, true);
+  van(w, 180, 30, true, M.paint3, M.sign, G);
+  palletStack(w, 204, 30, 4, G);
+  palletStack(w, 204, 36, 2, G);
+  pallet(w, 210, G, 38);
+  for (const x of [196, 199]) wheelieBin(w, x, 40, G, M.plastic);
   w.fill(180, G + 25, 50, 187, G + 29, 56, M.metal); // air conditioning units
   w.fill(206, G + 25, 52, 211, G + 28, 57, M.metal);
   tree(w, 236, 24, 17, 6);
@@ -507,7 +665,7 @@ function buildRiverside(w) {
   }
   w.fill(62, G - 1, 114, 92, G, 150, M.asphalt);
   car(w, 66, 124, false, M.paint);
-  car(w, 80, 130, false, M.paint2);
+  car(w, 80, 130, false, M.paint3);
   building(w, 136, 116, 60, 32, 2, { wall: M.brick, floor: M.wood, inner: M.plaster, win: M.pane, roof: M.slate, doorW: 6, groundMat: M.sign });
   signBoard(w, 160, 192, G + 9, 116, -1, 'THE BELL', M.wood, M.trim);
   roofChimney(w, 142, 132, G + 28, G + 45);
@@ -516,9 +674,12 @@ function buildRiverside(w) {
   awning(w, 205, 235, G + 8, 118, -1, 4, M.paint2, M.trim);
   w.fill(214, G + 13, 126, 220, G + 16, 132, M.metal);
   bench(w, 212, 108, G + 1);
+  wheelieBin(w, 198, 111, G + 1);
+  wheelieBin(w, 201, 111, G + 1, M.container);
   // parked cars along the kerb
   car(w, 20, 79, true, M.paint2);
-  car(w, 150, 79, true, M.paint);
+  car(w, 150, 79, true, M.paint3);
+  van(w, 54, 80, true, M.paint3, M.paint2);
   car(w, 180, 98, true, M.paint2);
 
   // across the river: boathouse on stilts, fishing pier, a house and the park
@@ -535,6 +696,16 @@ function buildRiverside(w) {
   w.fill(183, G + 9, 227, 185, G + 18, 229, M.metal);
   w.fill(181, G + 14, 227, 187, G + 15, 229, M.metal);
   bench(w, 170, 210, G);
+  // overhead power and phone lines along the south pavement, with drops to the houses and the pub
+  const poles = [6, 46, 86, 134, 174, 214, 252].map((x) => utilityPole(w, x, 109, true));
+  wireRun(w, poles, true, 4);
+  wire(w, [46, G + 34, 108], [46, G + 22, 70], 3);
+  wire(w, [86, G + 34, 108], [86, G + 22, 70], 3);
+  wire(w, [174, G + 34, 110], [174, G + 23, 115], 1);
+  w.fill(135, G + 24, 108, 138, G + 29, 111, M.metal); // transformer
+  // phone line along the back gardens of the terraces
+  const back = [12, 52, 92, 132, 160].map((x) => utilityPole(w, x, 4, true, G, 30));
+  wireRun(w, back, true, 3);
   bench(w, 194, 210, G);
 }
 
@@ -605,6 +776,7 @@ export const MAPS = [
 
 export function buildLevel(w, map) {
   w.data.fill(0);
+  WIRES.length = 0;
   map.build(w);
 }
 

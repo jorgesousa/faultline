@@ -3,7 +3,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from './world.js';
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
-import { buildLevel, countDestructible, G, MAPS } from './level.js';
+import { buildLevel, countDestructible, G, MAPS, WIRES } from './level.js';
 import { analyzeStructures } from './structure.js';
 import { placeLoot, LOOT_KINDS } from './loot.js';
 
@@ -132,6 +132,14 @@ vec3 surf(vec3 col) {
     float s = fract((uv.x + uv.y * 0.6) * 0.18);
     col *= 0.8 + 0.35 * smoothstep(0.0, 0.25, s) * (1.0 - smoothstep(0.25, 0.6, s));
     if (!top) col = mix(col, vec3(0.86, 0.85, 0.8), max(jl(uv.x, 0.07), jl(uv.y, 0.07)) * d1);
+  } else if (pat == 14) { // shipping container: corrugated steel sides, dents and rust streaks
+    if (!top) {
+      float rib = 0.5 + 0.5 * sin(uv.x * 6.2832 * 1.5);
+      col *= mix(1.0, 0.78 + 0.3 * rib, d4);
+      col *= 1.0 - 0.18 * smoothstep(0.6, 0.95, vn(vec2(uv.x * 0.9, uv.y * 0.12)));
+    }
+    col *= 0.9 + 0.14 * vn(uv * 0.8);
+    col = mix(col, vec3(0.36, 0.17, 0.08) * (0.5 + lum), smoothstep(0.7, 0.92, vn(uv * 0.9 + 13.0)) * 0.5);
   }
   // weathering on walls: grime near the ground and rain streaks running down
   if (!top && (pat == 1 || pat == 2 || pat == 4 || pat == 8 || pat == 9)) {
@@ -174,6 +182,9 @@ const staticBody = physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
 // ---------- voxel world + chunks ----------
 const world = new VoxelWorld();
 const wget = (x, y, z) => world.get(x, y, z);
+// cable voxels currently drawn as a smooth tube are skipped by the chunk mesher (colliders still use wget)
+const hiddenWire = new Uint8Array(WX * WY * WZ);
+const meshGet = (x, y, z) => (world.inb(x, y, z) && hiddenWire[world.idx(x, y, z)] ? 0 : world.get(x, y, z));
 const chunks = Array.from({ length: NCX * NCY * NCZ }, () => ({ mesh: null, colliders: [] }));
 const dirty = new Set();
 const chunkOf = (x, y, z) => ((Math.floor(y / CS) * NCZ + Math.floor(z / CS)) * NCX + Math.floor(x / CS));
@@ -189,7 +200,7 @@ function rebuildChunk(ci) {
   const c = chunks[ci];
   const cx = ci % NCX, cz = Math.floor(ci / NCX) % NCZ, cy = Math.floor(ci / (NCX * NCZ));
   const x0 = cx * CS, y0 = cy * CS, z0 = cz * CS;
-  const a = buildGeometryArrays(wget, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0);
+  const a = buildGeometryArrays(meshGet, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0);
   if (c.mesh) {
     c.mesh.geometry.dispose();
     scene.remove(c.mesh);
@@ -211,7 +222,44 @@ function rebuildChunk(ci) {
   );
 }
 
+// ---------- smooth overhead wires ----------
+const wireMat = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.6, metalness: 0.3 });
+let wireLines = [];
+function buildWires() {
+  for (const l of wireLines) { scene.remove(l.mesh); l.mesh.geometry.dispose(); }
+  hiddenWire.fill(0);
+  wireLines = [];
+  for (const wd of WIRES) {
+    if (!wd.cells.length) continue;
+    const [p, q] = [wd.p, wd.q].map((v) => new THREE.Vector3((v[0] + 0.5) * VS, (v[1] + 0.5) * VS, (v[2] + 0.5) * VS));
+    const pts = [];
+    for (let i = 0; i <= 24; i++) {
+      const t = i / 24;
+      pts.push(p.clone().lerp(q, t).add(new THREE.Vector3(0, -wd.sag * 4 * t * (1 - t) * VS, 0)));
+    }
+    const mesh = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, 0.03, 5), wireMat);
+    mesh.castShadow = true;
+    scene.add(mesh);
+    const idx = wd.cells.filter(([x, y, z]) => world.inb(x, y, z)).map(([x, y, z]) => world.idx(x, y, z));
+    for (const i of idx) hiddenWire[i] = 1;
+    wireLines.push({ mesh, cells: wd.cells, idx });
+  }
+}
+// once any voxel of a wire is gone, swap its tube back to voxel rods so the break is visible
+function checkWires() {
+  for (let k = wireLines.length - 1; k >= 0; k--) {
+    const l = wireLines[k];
+    if (l.idx.every((i) => world.data[i] === M.cable)) continue;
+    scene.remove(l.mesh);
+    l.mesh.geometry.dispose();
+    for (const i of l.idx) hiddenWire[i] = 0;
+    for (const [x, y, z] of l.cells) markDirty(x, y, z);
+    wireLines.splice(k, 1);
+  }
+}
+
 function flushDirty() {
+  checkWires();
   for (const ci of dirty) rebuildChunk(ci);
   dirty.clear();
 }
@@ -1400,6 +1448,7 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   setSpawn(map.spawn);
   placeLamps(map.lamps);
   buildScenery(map);
+  buildWires();
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
