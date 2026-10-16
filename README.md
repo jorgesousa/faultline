@@ -12,7 +12,7 @@ npm start          # serves on http://127.0.0.1:8931
 ## Controls
 
 WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
-1–7 or wheel switch weapon · F detector sound · R new map · Esc pause
+1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · R new map · Esc pause
 
 ## Loot hunt
 
@@ -35,6 +35,15 @@ WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
 | 5 | Plasma cannon | Fast straight energy bolt, opens a big crater on impact |
 | 6 | Railgun | Instant beam that bores a 30 m tunnel, even through steel |
 | 7 | Black hole | Sticks where it lands, pulls in debris, loot and you for 2 s, then erases a 4 m sphere |
+
+## Environments
+
+Press `T` (or use the buttons in the menu) to change the time of day and weather. The choice is remembered.
+
+- **Day**, **Sunset** (low sun, long shadows through the holes you make), **Night** (moon, stars, flashlight on), **Foggy dawn**, **Storm** (rain and lightning with thunder) and **Day cycle** (the sun moves across the sky, a full day every 4 minutes).
+- Buildings have ceiling lamps that light the rooms and spill out through holes. A lamp goes out with a spark when the ceiling it hangs from is destroyed, and lamps flicker when blasts shake them.
+- `L` toggles a flashlight that casts its own shadows. It switches on by itself when it gets dark.
+- Rain stops on roofs and floors and only gets inside through holes.
 
 ## How it works
 

@@ -27,7 +27,8 @@ const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 4
 scene.add(camera);
 
 const CENTER = new THREE.Vector3((WX * VS) / 2, 0, (WZ * VS) / 2);
-scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a4030, 1.1));
+const hemi = new THREE.HemisphereLight(0xdfefff, 0x4a4030, 1.1);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
 sun.position.copy(CENTER).add(new THREE.Vector3(-18, 34, -12));
 sun.target.position.copy(CENTER);
@@ -1058,6 +1059,8 @@ addEventListener('keydown', (e) => {
   const dg = /^Digit([1-9])$/.exec(e.code);
   if (dg && +dg[1] <= TOOLS.length) setTool(+dg[1] - 1);
   if (e.code === 'KeyR') resetLevel();
+  if (e.code === 'KeyT') setEnvironment(envIndex + 1);
+  if (e.code === 'KeyL') { setTorch(!torchOn); toast(`Flashlight ${torchOn ? 'on' : 'off'}`, 1); }
   if (e.code === 'KeyF') { setDetector(!hunt.detector); toast(`Detector sound ${hunt.detector ? 'on' : 'off'}`, 1.2); }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -1289,6 +1292,7 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
+  reviveLamps();
   createItems(specs);
   Object.assign(hunt, { seed, time: 0, points: 0, found: 0, over: false, started: false });
   hud.intro.style.display = 'block';
@@ -1299,6 +1303,285 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   camera.position.set(SPAWN.x, SPAWN.y + 0.62, SPAWN.z);
   camera.rotation.set(0, Math.PI, 0);
 }
+
+
+// ---------- environments: time of day, weather, lamps, flashlight ----------
+const C = (h) => new THREE.Color(h);
+const dirFrom = (elev, azim) => {
+  const e = THREE.MathUtils.degToRad(elev), a = THREE.MathUtils.degToRad(azim);
+  return new THREE.Vector3(Math.cos(e) * Math.cos(a), Math.sin(e), Math.cos(e) * Math.sin(a));
+};
+const ENV_KEYS_C = ['light', 'hs', 'hg', 'top', 'hor', 'sun'];
+const ENV_KEYS_N = ['li', 'hi', 'fogNear', 'fogFar', 'exp', 'stars', 'lamps', 'glow', 'disc', 'moon', 'rain', 'night'];
+const preset = (o) => ({ disc: 1, moon: 0, stars: 0, lamps: 0, rain: 0, night: 0, glow: 0.3, exp: 1, sun: o.light, ...o, dir: dirFrom(o.elev, o.azim) });
+const ENVS = [
+  { id: 'day', name: '☀️ Day', p: preset({ elev: 57, azim: -146, light: 0xfff1dc, li: 2.6, hs: 0xdfefff, hg: 0x4a4030, hi: 1.1, top: 0x5b97d4, hor: 0xb4d6ec, fogNear: 35, fogFar: 140, glow: 0.25 }) },
+  { id: 'sunset', name: '🌇 Sunset', p: preset({ elev: 7, azim: -70, light: 0xff8c42, li: 3.4, hs: 0xffa47e, hg: 0x2c2230, hi: 0.5, top: 0x2b3d6c, hor: 0xf08a58, sun: 0xffb070, fogNear: 30, fogFar: 170, exp: 1.1, stars: 0.12, lamps: 0.6, glow: 1.3 }) },
+  { id: 'night', name: '🌙 Night', p: preset({ elev: 38, azim: 150, light: 0x9db4ff, li: 0.5, hs: 0x24345a, hg: 0x0a0a12, hi: 0.32, top: 0x01030a, hor: 0x0b1428, sun: 0x000000, fogNear: 18, fogFar: 110, exp: 1.25, stars: 1, lamps: 1, glow: 0, disc: 0, moon: 1, night: 1 }) },
+  { id: 'fog', name: '🌫️ Foggy dawn', p: preset({ elev: 11, azim: 40, light: 0xffc9a6, li: 1.4, hs: 0xcfd6e6, hg: 0x6a5a50, hi: 0.9, top: 0x9aa6c0, hor: 0xe3cdc4, sun: 0xffd8b8, fogNear: 2, fogFar: 46, lamps: 0.4, glow: 0.7 }) },
+  { id: 'storm', name: '⛈️ Storm', p: preset({ elev: 50, azim: -100, light: 0xa8b8c8, li: 0.55, hs: 0x6c7682, hg: 0x2a2a26, hi: 0.6, top: 0x22282f, hor: 0x48505a, sun: 0x000000, fogNear: 10, fogFar: 85, lamps: 0.8, glow: 0, disc: 0, rain: 1 }) },
+  { id: 'cycle', name: '🔄 Day cycle', p: null },
+];
+const CYCLE_LEN = 240; // seconds per full day
+const cur = { ...preset(ENVS[0].p), dir: ENVS[0].p.dir.clone() };
+for (const k of ENV_KEYS_C) cur[k] = C(cur[k]);
+for (const e of ENVS) if (e.p) for (const k of ENV_KEYS_C) e.p[k] = C(e.p[k]);
+const tmpEnv = { dir: new THREE.Vector3() };
+for (const k of ENV_KEYS_C) tmpEnv[k] = new THREE.Color();
+let envIndex = Math.max(0, ENVS.findIndex((e) => e.id === localStorage.getItem('vw-env')));
+let cycleTime = CYCLE_LEN * 0.22, envBlend = 0;
+
+// sky dome with sun glow, stars and a moon; follows the camera
+const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { top: { value: C(0) }, hor: { value: C(0) }, sun: { value: C(0) }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, glow: { value: 0 }, disc: { value: 1 } },
+  vertexShader: 'varying vec3 vDir; void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform vec3 top, hor, sun, sunDir; uniform float glow, disc; varying vec3 vDir;
+    void main() {
+      float h = vDir.y;
+      vec3 col = mix(hor, top, pow(clamp(h, 0.0, 1.0), 0.55));
+      float d = max(dot(normalize(vDir), sunDir), 0.0);
+      col += sun * (glow * (0.35 * pow(d, 6.0) + 0.6 * pow(d, 64.0)) * (1.0 - 0.6 * clamp(h, 0.0, 1.0)));
+      col = mix(col, sun * 6.0, disc * smoothstep(0.9993, 0.9996, d));
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+}));
+sky.renderOrder = -1;
+scene.add(sky);
+const stars = (() => {
+  const n = 1400, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, y = 0.04 + Math.random() * 0.96, r = Math.sqrt(1 - y * y);
+    pos.set([Math.cos(a) * r * 280, y * 280, Math.sin(a) * r * 280], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, transparent: true, depthWrite: false, fog: false }));
+})();
+const moon = new THREE.Mesh(new THREE.SphereGeometry(7, 24, 16), new THREE.MeshBasicMaterial({ color: 0xe4ebff, transparent: true, fog: false, depthWrite: false }));
+sky.add(stars, moon);
+
+// flashlight held by the player; casts its own shadows
+const torch = new THREE.SpotLight(0xfff2dc, 0, 45, 0.42, 0.5, 1.2);
+torch.position.set(-0.35, -0.15, 0.15);
+torch.target.position.set(-0.05, -0.1, -6);
+torch.castShadow = true;
+torch.shadow.mapSize.set(1024, 1024);
+torch.shadow.bias = -0.0006;
+torch.shadow.normalBias = 0.03;
+torch.shadow.camera.near = 0.2;
+camera.add(torch, torch.target);
+let torchOn = false, lastAutoTorch = null;
+function setTorch(on) { torchOn = on; beep(on ? 1500 : 900, 0.03, 0.04, 'square'); }
+
+// ceiling lamps inside the buildings: [x, ceilingY, z] in voxels; they die with their ceiling
+const LAMP_SPOTS = [[36, G + 12, 33], [36, G + 12, 47], [36, G + 24, 33], [36, G + 24, 47],
+  [84, G + 12, 38], [84, G + 24, 38], [84, G + 36, 38], [84, G + 48, 38], [120, G + 12, 39], [134, G + 12, 39]];
+const bulbGeo = new THREE.SphereGeometry(0.09, 10, 8);
+const lamps = LAMP_SPOTS.map(([x, y, z]) => {
+  const light = new THREE.SpotLight(0xffc27a, 0, 7, 1.15, 0.8, 1);
+  light.position.set((x + 0.5) * VS, y * VS - 0.25, (z + 0.5) * VS);
+  light.target.position.copy(light.position).add(new THREE.Vector3(0, -3, 0));
+  const bulb = new THREE.Mesh(bulbGeo, new THREE.MeshBasicMaterial({ color: 0xfff0c8 }));
+  bulb.position.copy(light.position);
+  const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.2, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
+  cord.position.y = 0.14;
+  bulb.add(cord);
+  scene.add(light, light.target, bulb);
+  return { x, y, z, light, bulb, dead: false, flick: 0 };
+});
+function reviveLamps() { for (const l of lamps) { l.dead = false; l.flick = 0; l.bulb.visible = true; } }
+
+// rain that stops on roofs and only gets in through holes you make
+const RAIN_N = 1800;
+const rainPos = new Float32Array(RAIN_N * 6), rainStop = new Float32Array(RAIN_N);
+const rain = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xaab8c8, transparent: true, opacity: 0.4, depthWrite: false }));
+rain.geometry.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+rain.frustumCulled = false;
+rain.visible = false;
+scene.add(rain);
+function surfaceY(x, z) {
+  const vx = Math.floor(x / VS), vz = Math.floor(z / VS);
+  if (vx < 0 || vz < 0 || vx >= WX || vz >= WZ) return G * VS;
+  for (let y = WY - 1; y >= 0; y--) if (wget(vx, y, vz)) return (y + 1) * VS;
+  return 0;
+}
+function respawnDrop(i, fresh) {
+  const x = camera.position.x + (Math.random() - 0.5) * 36, z = camera.position.z + (Math.random() - 0.5) * 36;
+  const y = camera.position.y + (fresh ? Math.random() * 22 - 6 : 14 + Math.random() * 3);
+  rainPos[i * 6] = x; rainPos[i * 6 + 1] = y; rainPos[i * 6 + 2] = z;
+  rainStop[i] = surfaceY(x, z);
+}
+for (let i = 0; i < RAIN_N; i++) respawnDrop(i, true);
+let rainSound = null;
+function noiseBuffer(sec) {
+  const b = audio.createBuffer(1, audio.sampleRate * sec, audio.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+function updateRainSound(level) {
+  if (!audio) return;
+  if (!rainSound) {
+    const src = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+    src.buffer = noiseBuffer(2); src.loop = true;
+    f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = 0.4;
+    g.gain.value = 0;
+    src.connect(f).connect(g).connect(audio.destination);
+    src.start();
+    rainSound = g;
+  }
+  rainSound.gain.value = level * 0.05;
+}
+function thunder(delay, vol) {
+  if (!audio) return;
+  const src = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain(), t = audio.currentTime + delay;
+  src.buffer = noiseBuffer(4);
+  f.type = 'lowpass'; f.frequency.value = 220;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.08);
+  g.gain.exponentialRampToValueAtTime(vol * 0.4, t + 0.6);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 3.8);
+  src.connect(f).connect(g).connect(audio.destination);
+  src.start(t);
+}
+let boltTimer = 6, bolt = 0, boltQueue = [];
+const boltDir = new THREE.Vector3();
+
+function setEnvironment(i, quiet = false) {
+  envIndex = (i + ENVS.length) % ENVS.length;
+  localStorage.setItem('vw-env', ENVS[envIndex].id);
+  lastAutoTorch = null;
+  envBlend = 0;
+  document.querySelectorAll('.env-btn').forEach((b) => b.classList.toggle('on', +b.dataset.i === envIndex));
+  if (!quiet) toast(ENVS[envIndex].name, 1.4);
+}
+
+function blendEnv(a, b, k, out) {
+  for (const key of ENV_KEYS_C) out[key].copy(a[key]).lerp(b[key], k);
+  for (const key of ENV_KEYS_N) out[key] = a[key] + (b[key] - a[key]) * k;
+  return out;
+}
+const sunDirNow = new THREE.Vector3();
+function cycleTarget(dt) {
+  cycleTime = (cycleTime + dt) % CYCLE_LEN;
+  const th = (cycleTime / CYCLE_LEN) * Math.PI * 2;
+  sunDirNow.set(-Math.cos(th), Math.sin(th), -0.45).normalize();
+  const e = sunDirNow.y, [day, set, night] = [ENVS[0].p, ENVS[1].p, ENVS[2].p];
+  if (e > 0.4) blendEnv(day, day, 0, tmpEnv);
+  else if (e > 0.06) blendEnv(set, day, (e - 0.06) / 0.34, tmpEnv);
+  else if (e > -0.12) blendEnv(night, set, (e + 0.12) / 0.18, tmpEnv);
+  else blendEnv(night, night, 0, tmpEnv);
+  const up = e > -0.03;
+  tmpEnv.dir.copy(sunDirNow);
+  if (!up) tmpEnv.dir.set(-sunDirNow.x, -sunDirNow.y, sunDirNow.z);
+  tmpEnv.li *= THREE.MathUtils.smoothstep(Math.abs(e + 0.03), 0, 0.08);
+  tmpEnv.disc = up ? 1 : 0;
+  tmpEnv.moon = up ? 0 : 1;
+  return tmpEnv;
+}
+
+function updateEnvironment(dt) {
+  const env = ENVS[envIndex];
+  const target = env.p ?? cycleTarget(dt);
+  envBlend = Math.min(1, envBlend + dt * 0.8);
+  const k = env.p ? 1 - Math.exp(-dt * (1 + envBlend * 6)) : 1 - Math.exp(-dt * 8);
+  blendEnv(cur, target, k, cur);
+  if (env.p || cur.dir.dot(target.dir) > 0.5) cur.dir.lerp(target.dir, k).normalize();
+  else cur.dir.copy(target.dir);
+
+  // lightning
+  if (cur.rain > 0.5) {
+    boltTimer -= dt;
+    if (boltTimer <= 0) {
+      boltTimer = 5 + Math.random() * 10;
+      boltDir.copy(dirFrom(55 + Math.random() * 30, Math.random() * 360));
+      boltQueue = [0, 0.09 + Math.random() * 0.05, 0.25 + Math.random() * 0.2];
+      thunder(0.4 + Math.random() * 1.6, 0.35 + Math.random() * 0.25);
+    }
+  }
+  for (let i = boltQueue.length - 1; i >= 0; i--) {
+    boltQueue[i] -= dt;
+    if (boltQueue[i] <= 0) { bolt = 0.7 + Math.random() * 0.3; boltQueue.splice(i, 1); }
+  }
+  bolt *= Math.exp(-dt * 13);
+
+  const d = bolt > 0.05 ? boltDir : cur.dir;
+  sun.position.copy(CENTER).addScaledVector(d, 80);
+  sun.color.copy(cur.light).lerp(_c.set(0xdfe8ff), bolt);
+  sun.intensity = cur.li + bolt * 9;
+  hemi.color.copy(cur.hs);
+  hemi.groundColor.copy(cur.hg);
+  hemi.intensity = cur.hi + bolt * 1.5;
+  const u = sky.material.uniforms;
+  u.top.value.copy(cur.top).lerp(_c.set(0x8c96b0), bolt * 0.7);
+  u.hor.value.copy(cur.hor).lerp(_c.set(0xb0b8cc), bolt * 0.7);
+  u.sun.value.copy(cur.sun);
+  u.glow.value = cur.glow;
+  u.disc.value = cur.disc;
+  u.sunDir.value.copy(env.p ? cur.dir : sunDirNow.lengthSq() ? sunDirNow : cur.dir);
+  scene.background.copy(u.hor.value);
+  scene.fog.color.copy(u.hor.value);
+  scene.fog.near = cur.fogNear;
+  scene.fog.far = cur.fogFar;
+  renderer.toneMappingExposure = cur.exp;
+  sky.position.copy(camera.position);
+  stars.material.opacity = cur.stars;
+  stars.visible = cur.stars > 0.02;
+  moon.position.copy(cur.dir).multiplyScalar(270);
+  moon.material.opacity = cur.moon;
+  moon.visible = cur.moon > 0.02 && cur.dir.y > 0;
+
+  // flashlight comes on by itself when it gets dark (L overrides)
+  const autoTorch = cur.night > 0.5;
+  if (autoTorch !== lastAutoTorch) { if (lastAutoTorch !== null || autoTorch) torchOn = autoTorch; lastAutoTorch = autoTorch; }
+  torch.intensity = torchOn ? 26 : 0;
+  torch.shadow.autoUpdate = torchOn || !torch.shadow.map; // the map must exist or the shader's sampler breaks
+
+  // ceiling lamps
+  for (const l of lamps) {
+    if (!l.dead && !wget(l.x, l.y, l.z)) {
+      l.dead = true;
+      l.bulb.visible = false;
+      const p = l.light.position;
+      for (let i = 0; i < 25; i++) sparkle.spawn(p.x, p.y, p.z, (Math.random() - 0.5) * 4, Math.random() * 3, (Math.random() - 0.5) * 4, 0.4 + Math.random() * 0.4, 0.7, 2, 1.6, 0.8);
+      beep(2400, 0.05, 0.03, 'square');
+    }
+    if (!l.dead && shake > 0.25 && Math.random() < 0.3) l.flick = 0.15 + Math.random() * 0.3;
+    l.flick = Math.max(0, l.flick - dt);
+    const on = l.dead ? 0 : cur.lamps * (l.flick > 0 ? (Math.random() < 0.5 ? 0.1 : 1) : 1);
+    l.light.intensity = on * 5;
+    l.bulb.material.color.setRGB(0.25 + on * 1.75, 0.22 + on * 1.6, 0.18 + on * 1.1);
+  }
+
+  // rain
+  rain.visible = cur.rain > 0.05;
+  rain.material.opacity = cur.rain * 0.4;
+  updateRainSound(cur.rain);
+  if (rain.visible) {
+    const fall = 24 * dt, wind = 3 * dt;
+    for (let i = 0; i < RAIN_N; i++) {
+      const o = i * 6;
+      rainPos[o] += wind; rainPos[o + 1] -= fall;
+      const far = Math.abs(rainPos[o] - camera.position.x) > 20 || Math.abs(rainPos[o + 2] - camera.position.z) > 20;
+      if (rainPos[o + 1] < rainStop[i] || far) {
+        if (rainPos[o + 1] < rainStop[i] && Math.random() < 0.08 && !far) chips.spawn(rainPos[o], rainStop[i] + 0.02, rainPos[o + 2], (Math.random() - 0.5), 1.2, (Math.random() - 0.5), 0.15, 0.25, 0.65, 0.72, 0.8);
+        respawnDrop(i, false);
+      } else if ((i & 63) === (frameNo & 63)) rainStop[i] = surfaceY(rainPos[o], rainPos[o + 2]); // pick up new holes
+      rainPos[o + 3] = rainPos[o] - 0.04; rainPos[o + 4] = rainPos[o + 1] + 0.45; rainPos[o + 5] = rainPos[o + 2];
+    }
+    rain.geometry.attributes.position.needsUpdate = true;
+  }
+  frameNo++;
+}
+const _c = new THREE.Color();
+let frameNo = 0;
+document.querySelectorAll('.envs').forEach((box) => {
+  box.innerHTML = ENVS.map((e, i) => `<button class="env-btn" data-i="${i}">${e.name}</button>`).join('');
+  box.addEventListener('click', (ev) => { ev.stopPropagation(); const b = ev.target.closest('.env-btn'); if (b) setEnvironment(+b.dataset.i, true); });
+});
+setEnvironment(envIndex, true);
 
 // ---------- main loop ----------
 let shake = 0, acc = 0, last = performance.now(), fpsT = 0, frames = 0, fps = 0;
@@ -1354,6 +1637,7 @@ function frame(now) {
     shake = Math.max(0, shake - dt * 1.5);
   }
 
+  updateEnvironment(dt);
   renderer.render(scene, camera);
 
   frames++;
@@ -1382,8 +1666,10 @@ document.getElementById('loading').remove();
 window.__game = {
   explode: (x, y, z, r) => explode(new THREE.Vector3(x, y, z), r),
   stats: () => ({ impacts: impactCount, maxDv: +maxImpactDv.toFixed(1), debris: debris.length, destroyed, pct: (100 * destroyed) / initialDestructible, fps }),
-  look: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); player.body.setTranslation({ x, y: y - 0.62, z }, true); },
+  look: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); player.body.setTranslation({ x, y: y - 0.62, z }, true); player.body.setNextKinematicTranslation({ x, y: y - 0.62, z }); player.vy = 0; player.kick.set(0, 0, 0); },
   use: (i) => { setTool(i); cooldown = 0; useTool(); },
+  env: (i, t) => { setEnvironment(i, true); if (t !== undefined) cycleTime = t * CYCLE_LEN; for (let k = 0; k < 120; k++) updateEnvironment(0.05); },
+  lamps: () => lamps.filter((l) => !l.dead).length,
   projectiles: () => projectiles.map((p) => ({ kind: p.kind, stuck: p.stuck, fuse: +p.fuse.toFixed(2), onDebris: !!p.deb, x: +p.pos.x.toFixed(2), y: +p.pos.y.toFixed(2), z: +p.pos.z.toFixed(2) })),
   carve: (x, y, z, r, power = 3) => destroyAt(new THREE.Vector3(x, y, z), r, power),
   items: () => items.map((it) => { const t = it.taken ? it.home : it.body.translation(); return { id: it.id, kind: it.kind, where: it.where, taken: it.taken, x: +t.x.toFixed(2), y: +t.y.toFixed(2), z: +t.z.toFixed(2) }; }),

@@ -28,6 +28,10 @@
     #signal em { font-style: normal; }
     .sound-toggle { background: #2a2d35; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
     .sound-toggle:hover { background: #363a44; }
+    .envs { display: flex; flex-wrap: wrap; gap: 5px; }
+    .env-btn { background: #2a2d35; color: #ddd; border: 1px solid #444; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
+    .env-btn:hover { background: #363a44; }
+    .env-btn.on { border-color: #ffb347; color: #fff; background: #3a3226; }
     .board h3 { margin: 14px 0 4px; font-size: 15px; color: #ffb347; }
     .board table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .board td { padding: 2px 6px; }
@@ -62,9 +66,10 @@
       <p>
         <kbd>W A S D</kbd> move · <kbd>Shift</kbd> sprint · <kbd>Space</kbd> jump<br />
         <kbd>Mouse</kbd> look · <kbd>Left click</kbd> use tool<br />
-        <kbd>1</kbd>–<kbd>7</kbd> / <kbd>wheel</kbd> switch weapon · <kbd>F</kbd> detector sound · <kbd>R</kbd> new map · <kbd>Esc</kbd> pause
+        <kbd>1</kbd>–<kbd>7</kbd> / <kbd>wheel</kbd> switch weapon · <kbd>F</kbd> detector sound · <kbd>T</kbd> environment · <kbd>L</kbd> flashlight · <kbd>R</kbd> new map · <kbd>Esc</kbd> pause
       </p>
       <p><button class="sound-toggle"></button></p>
+      <div class="envs"></div>
       <h3 style="margin:14px 0 4px;color:#ffb347;font-size:15px">🏆 Best times</h3>
       <div class="board"></div>
       <p><b>Click to play</b></p>
