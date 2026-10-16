@@ -12,7 +12,7 @@ npm start          # serves on http://127.0.0.1:8931
 ## Controls
 
 WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
-1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · R restart · Esc pause
+1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · M mini-map · R restart · Esc pause
 
 ## Loot hunt
 
@@ -42,6 +42,7 @@ Press `T` (or use the buttons in the menu) to change the time of day and weather
 
 - **Day**, **Sunset** (low sun, long shadows through the holes you make), **Night** (moon, stars, flashlight on), **Foggy dawn**, **Storm** (rain and lightning with thunder) and **Day cycle** (the sun moves across the sky, a full day every 4 minutes).
 - Buildings have ceiling lamps that light the rooms and spill out through holes. A lamp goes out with a spark when the ceiling it hangs from is destroyed, and lamps flicker when blasts shake them.
+- **HUD**: a compact hotbar (the weapon name shows briefly when you switch, and the slot fills while the weapon recharges) and a mini-map of the destructible area that warns you near the edge of the world.
 - `L` toggles a flashlight that casts its own shadows. It switches on by itself when it gets dark.
 - Rain stops on roofs and floors and only gets inside through holes.
 
@@ -50,7 +51,7 @@ Press `T` (or use the buttons in the menu) to change the time of day and weather
 - **World**: a 256×80×256 grid (64×20×64 m) of 25 cm voxels (`src/world.js`), each storing a material id with colour, hardness and density.
 - **Rendering**: the world is split into 16³ chunks. Each chunk is meshed with only exposed faces and per-vertex ambient occlusion (`src/mesher.js`). Only changed chunks are rebuilt.
 - **Surface detail**: each material has a procedural pattern drawn in the fragment shader (brick courses, stone blocks, roof tiles, boards, paving, window bars), plus grime and rain streaks low on walls. Buildings are dressed with voxel sills, lintels, string courses, quoins, door hoods, bay windows, dormers, gutters, chimneys, signs and awnings, so every detail can be blown off too.
-- **Street clutter**: utility poles with sagging overhead wires, shipping containers (corrugated, some open), pallet stacks, wheelie bins, and detailed cars and vans (lights, plates, bumpers, mirrors, seats, tapered cabins). Wires are drawn as smooth curves while intact and switch to voxel cable once anything along them is broken.
+- **Street clutter**: utility poles with sagging overhead wires, shipping containers (corrugated, some open), pallet stacks, wheelie bins, and detailed cars and vans (lights, plates, bumpers, mirrors, seats, tapered cabins). Wires are simulated ropes: blasts, shots and the hammer snap them, the loose ends swing down from the poles, and they fall when a pole is destroyed.
 - **Collision**: each chunk's solid voxels are merged into a few boxes (greedy box decomposition) and used as static Rapier colliders.
 - **Destruction**: tools remove voxels in a sphere if the tool is strong enough for the material. Glass shatters over a wider radius.
 - **Connectivity**: after removal, a flood fill (exploring downwards first) checks whether neighbouring voxels still reach the ground. Islands that don't become dynamic rigid bodies with their own mesh and box colliders.

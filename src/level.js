@@ -351,27 +351,13 @@ function utilityPole(w, x, z, alongX, base = G + 1, h = 34) {
   return [[...ca(-3), top - 1], [x, z, top], [...ca(3), top - 1]].map(([px, pz, py]) => [px, py, pz]);
 }
 
-// Wires laid by the current map, in world voxel coordinates: the renderer draws each one as a smooth
-// curve while all its voxels are intact, and falls back to the voxel rods once it is damaged.
+// Overhead wires laid by the current map, in world voxel coordinates. They are not voxels: the game
+// draws each one as a rope hanging from the cells next to its anchors (p and q) and simulates it
+// once it is cut or an anchor is destroyed.
 export const WIRES = [];
-
-// sagging cable between two points, laid one axis step at a time so it stays face-connected
 function wire(w, p, q, sag) {
-  const n = Math.max(Math.abs(q[0] - p[0]), Math.abs(q[2] - p[2]), 1) * 2;
-  const cur = [...p];
-  const ox = w.ox ?? 0, oz = w.oz ?? 0, cells = [];
-  const put = () => {
-    if (w.get(cur[0], cur[1], cur[2])) return;
-    w.set(cur[0], cur[1], cur[2], M.cable);
-    cells.push([cur[0] + ox, cur[1], cur[2] + oz]);
-  };
-  WIRES.push({ p: [p[0] + ox, p[1], p[2] + oz], q: [q[0] + ox, q[1], q[2] + oz], sag, cells });
-  put();
-  for (let i = 1; i <= n; i++) {
-    const t = i / n;
-    const tgt = [Math.round(p[0] + (q[0] - p[0]) * t), Math.round(p[1] + (q[1] - p[1]) * t - sag * 4 * t * (1 - t)), Math.round(p[2] + (q[2] - p[2]) * t)];
-    for (const a of [0, 2, 1]) while (cur[a] !== tgt[a]) { cur[a] += Math.sign(tgt[a] - cur[a]); put(); }
-  }
+  const ox = w.ox ?? 0, oz = w.oz ?? 0;
+  WIRES.push({ p: [p[0] + ox, p[1], p[2] + oz], q: [q[0] + ox, q[1], q[2] + oz], sag });
 }
 // run cables between consecutive poles, from one attachment to the matching one on the next pole
 function wireRun(w, poles, alongX, sag = 4) {

@@ -10,19 +10,28 @@
     canvas { display: block; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px #0008; pointer-events: none; }
     #stats { position: fixed; top: 12px; left: 12px; padding: 6px 10px; background: #0008; border-radius: 6px; font-size: 13px; }
-    #toolbar { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
-    .tool { background: #0009; border: 2px solid transparent; border-radius: 8px; padding: 5px 9px; font-size: 13px; width: 128px; }
-    .tool small { display: block; opacity: .7; font-size: 10px; margin-top: 2px; }
-    .tool.active { border-color: #ffb347; background: #000c; }
+    #toolbar { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: #0006; border-radius: 10px; transition: opacity .5s; }
+    #toolbar.idle { opacity: .45; }
+    .tool { position: relative; width: 40px; height: 40px; display: grid; place-items: center; border: 2px solid transparent; border-radius: 7px; color: #ddd; overflow: hidden; }
+    .tool svg { width: 24px; height: 24px; }
+    .tool b { position: absolute; top: 1px; left: 4px; font-size: 10px; opacity: .7; }
+    .tool i { position: absolute; left: 0; bottom: 0; width: 100%; height: 0; background: #ffffff30; }
+    .tool.active { border-color: #ffb347; background: #000b; color: #ffcf7a; }
+    #toolname { position: fixed; bottom: 108px; left: 50%; transform: translateX(-50%); text-align: center; font-size: 15px; font-weight: 600; text-shadow: 0 1px 3px #000; white-space: nowrap; pointer-events: none; transition: opacity .4s; }
+    #toolname small { display: block; font-size: 12px; font-weight: 400; opacity: .8; }
     #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000a; cursor: pointer; }
     #overlay .panel { max-width: 460px; max-height: 90vh; overflow: auto; background: #1b1d22; border-radius: 12px; padding: 24px 28px; line-height: 1.5; }
     #overlay h1 { margin: 0 0 6px; font-size: 28px; color: #ffb347; }
     #overlay kbd { background: #333; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
     #hunt { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 14px; background: #000a; border-radius: 6px; font-size: 16px; white-space: nowrap; }
-    #signal { position: fixed; bottom: 92px; left: 50%; transform: translateX(-50%); width: 240px; text-align: center; font-size: 12px; text-shadow: 0 1px 2px #000; }
+    #signal { position: fixed; bottom: 66px; left: 50%; transform: translateX(-50%); width: 240px; text-align: center; font-size: 12px; text-shadow: 0 1px 2px #000; }
     #signal div { height: 8px; background: #0009; border-radius: 4px; overflow: hidden; margin-top: 3px; }
     #signal i { display: block; height: 100%; width: 0; background: #5fc8ff; transition: width .2s, background .2s; }
     #toast { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); padding: 6px 14px; background: #000b; border-radius: 6px; font-size: 18px; opacity: 0; pointer-events: none; white-space: nowrap; }
+    #mini { position: fixed; top: 12px; right: 12px; padding: 4px; background: #000a; border-radius: 8px; text-align: center; font-size: 12px; }
+    #mini canvas { display: block; width: 180px; height: 180px; border-radius: 4px; image-rendering: pixelated; }
+    #mini span { display: none; margin-top: 4px; color: #ff6a55; font-weight: 600; }
+    #mini.edge span { display: block; }
     #toast small { opacity: .7; font-size: 13px; }
     #end { display: none; }
     #signal em { font-style: normal; }
@@ -58,9 +67,11 @@
   <div id="crosshair"></div>
   <div id="stats"></div>
   <div id="toolbar"></div>
+  <div id="toolname"></div>
   <div id="hunt"></div>
   <div id="signal">Detector <em></em> · <span>—</span><div><i></i></div></div>
   <div id="toast"></div>
+  <div id="mini"><canvas width="180" height="180"></canvas><span>Edge of the world</span></div>
   <div id="overlay">
     <div class="panel" id="intro">
       <h1>Voxel Wrecker: Loot Hunt</h1>
@@ -69,7 +80,7 @@
       <p>
         <kbd>W A S D</kbd> move · <kbd>Shift</kbd> sprint · <kbd>Space</kbd> jump<br />
         <kbd>Mouse</kbd> look · <kbd>Left click</kbd> use tool<br />
-        <kbd>1</kbd>–<kbd>7</kbd> / <kbd>wheel</kbd> switch weapon · <kbd>F</kbd> detector sound · <kbd>T</kbd> environment · <kbd>L</kbd> flashlight · <kbd>R</kbd> restart · <kbd>Esc</kbd> pause
+        <kbd>1</kbd>–<kbd>7</kbd> / <kbd>wheel</kbd> switch weapon · <kbd>F</kbd> detector sound · <kbd>T</kbd> environment · <kbd>L</kbd> flashlight · <kbd>M</kbd> mini-map · <kbd>R</kbd> restart · <kbd>Esc</kbd> pause
       </p>
       <p><button class="sound-toggle"></button></p>
       <div class="envs maps"></div>

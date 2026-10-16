@@ -35,8 +35,6 @@ export const MAT = [
   { name: 'flower', pat: 10, color: 0xd2476a, hard: 0, density: 0.3, span: 10, strength: 40 },
   { name: 'pane', pat: 13, shatter: true, color: 0x9fcfe0, hard: 0, density: 2.5, span: 4, strength: 20 },
   { name: 'darkbrick', pat: 1, color: 0x6e3a2c, hard: 2, density: 1.9, span: 10, strength: 500 },
-  // thin: drawn as a slim rod joining its neighbours (power and phone cables)
-  { name: 'cable', pat: 0, thin: true, color: 0x1c1d20, hard: 0, density: 0.4, span: 48, strength: 60 },
   { name: 'container', pat: 14, color: 0x2f6d8c, hard: 2, density: 1.6, span: 16, strength: 800 },
   { name: 'container2', pat: 14, color: 0xb4532c, hard: 2, density: 1.6, span: 16, strength: 800 },
   { name: 'container3', pat: 14, color: 0x3f7a4a, hard: 2, density: 1.6, span: 16, strength: 800 },
@@ -50,7 +48,6 @@ export const M = Object.fromEntries(MAT.map((m, i) => [m?.name, i]).filter(([n])
 
 // surface pattern drawn by the voxel shader (see main.js)
 export const MAT_PAT = MAT.map((m) => m?.pat ?? 0);
-export const MAT_THIN = MAT.map((m) => (m?.thin ? 1 : 0));
 
 // Linear-space RGB for vertex colours
 export const MAT_RGB = MAT.map((m) => {

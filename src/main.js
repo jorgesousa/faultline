@@ -5,6 +5,7 @@ import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from '
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
 import { buildLevel, countDestructible, G, MAPS, WIRES } from './level.js';
 import { analyzeStructures } from './structure.js';
+import { Wires } from './wires.js';
 import { placeLoot, LOOT_KINDS } from './loot.js';
 
 await RAPIER.init();
@@ -182,11 +183,9 @@ const staticBody = physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
 // ---------- voxel world + chunks ----------
 const world = new VoxelWorld();
 const wget = (x, y, z) => world.get(x, y, z);
-// cable voxels currently drawn as a smooth tube are skipped by the chunk mesher (colliders still use wget)
-const hiddenWire = new Uint8Array(WX * WY * WZ);
-const meshGet = (x, y, z) => (world.inb(x, y, z) && hiddenWire[world.idx(x, y, z)] ? 0 : world.get(x, y, z));
 const chunks = Array.from({ length: NCX * NCY * NCZ }, () => ({ mesh: null, colliders: [] }));
 const dirty = new Set();
+const wires = new Wires(scene, world, (p) => wireSparks(p));
 const chunkOf = (x, y, z) => ((Math.floor(y / CS) * NCZ + Math.floor(z / CS)) * NCX + Math.floor(x / CS));
 
 function markDirty(x, y, z) {
@@ -200,7 +199,7 @@ function rebuildChunk(ci) {
   const c = chunks[ci];
   const cx = ci % NCX, cz = Math.floor(ci / NCX) % NCZ, cy = Math.floor(ci / (NCX * NCZ));
   const x0 = cx * CS, y0 = cy * CS, z0 = cz * CS;
-  const a = buildGeometryArrays(meshGet, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0);
+  const a = buildGeometryArrays(wget, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0);
   if (c.mesh) {
     c.mesh.geometry.dispose();
     scene.remove(c.mesh);
@@ -222,44 +221,7 @@ function rebuildChunk(ci) {
   );
 }
 
-// ---------- smooth overhead wires ----------
-const wireMat = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.6, metalness: 0.3 });
-let wireLines = [];
-function buildWires() {
-  for (const l of wireLines) { scene.remove(l.mesh); l.mesh.geometry.dispose(); }
-  hiddenWire.fill(0);
-  wireLines = [];
-  for (const wd of WIRES) {
-    if (!wd.cells.length) continue;
-    const [p, q] = [wd.p, wd.q].map((v) => new THREE.Vector3((v[0] + 0.5) * VS, (v[1] + 0.5) * VS, (v[2] + 0.5) * VS));
-    const pts = [];
-    for (let i = 0; i <= 24; i++) {
-      const t = i / 24;
-      pts.push(p.clone().lerp(q, t).add(new THREE.Vector3(0, -wd.sag * 4 * t * (1 - t) * VS, 0)));
-    }
-    const mesh = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, 0.03, 5), wireMat);
-    mesh.castShadow = true;
-    scene.add(mesh);
-    const idx = wd.cells.filter(([x, y, z]) => world.inb(x, y, z)).map(([x, y, z]) => world.idx(x, y, z));
-    for (const i of idx) hiddenWire[i] = 1;
-    wireLines.push({ mesh, cells: wd.cells, idx });
-  }
-}
-// once any voxel of a wire is gone, swap its tube back to voxel rods so the break is visible
-function checkWires() {
-  for (let k = wireLines.length - 1; k >= 0; k--) {
-    const l = wireLines[k];
-    if (l.idx.every((i) => world.data[i] === M.cable)) continue;
-    scene.remove(l.mesh);
-    l.mesh.geometry.dispose();
-    for (const i of l.idx) hiddenWire[i] = 0;
-    for (const [x, y, z] of l.cells) markDirty(x, y, z);
-    wireLines.splice(k, 1);
-  }
-}
-
 function flushDirty() {
-  checkWires();
   for (const ci of dirty) rebuildChunk(ci);
   dirty.clear();
 }
@@ -592,6 +554,7 @@ function splitDebris(deb) {
 // ---------- destruction API ----------
 function destroyAt(p, r, power, glassMul = 2.2, end = null) {
   const removed = carveWorld(p, r, power, glassMul, end);
+  wires.cut(p, r + 0.1, end);
   if (removed.length) {
     detachFloating(removed);
     for (const c of removed) pendingStructural.push(c);
@@ -741,6 +704,7 @@ function explode(p, r = 2.2, push = 6, power = 3, color = 0xffb060) {
     deb.body.applyImpulseAtPoint({ x: _v.x * k, y: _v.y * k, z: _v.z * k },
       { x: t.x + (Math.random() - 0.5) * deb.radius, y: t.y + (Math.random() - 0.5) * deb.radius, z: t.z + (Math.random() - 0.5) * deb.radius }, true);
   }
+  wires.blast(p, R, push);
   for (const b of bombs) if (b.fuse > 0.12 && distTo(b.body.translation(), p) < R) b.fuse = 0.12;
   for (const s of projectiles) if (s.kind === 'sticky' && s.fuse > 0.12 && distTo(s.pos, p) < R) s.fuse = 0.12;
   for (const it of items) {
@@ -979,6 +943,13 @@ function updateProjectiles(dt) {
 
 const railBeams = [];
 const RAIL_LEN = 30;
+function wireSparks(p) {
+  for (let i = 0; i < 30; i++)
+    sparkle.spawn(p.x, p.y, p.z, (Math.random() - 0.5) * 5, Math.random() * 3, (Math.random() - 0.5) * 5, 0.3 + Math.random() * 0.5, 1, 3, 2.6, 1.2);
+  beep(2600, 0.04, 0.04, 'square');
+  beep(1900, 0.05, 0.03, 'square', 0.05);
+}
+
 function fireRailgun() {
   const T = TOOLS[5];
   const hit = aimRay(T.range);
@@ -997,6 +968,7 @@ function fireRailgun() {
   beep(120, 0.4, 0.1, 'square', 0.02);
   shake = Math.max(shake, 0.25);
   player.kick.addScaledVector(dir, -2.5);
+  wires.cut(start, 0.3, to);
   if (!hit) return;
   for (let i = 0; i < 60; i++) {
     const k = Math.random();
@@ -1015,6 +987,54 @@ function fireRailgun() {
   }
   destroyAt(from, T.radius, T.power, 1.4, to);
   for (let i = 0; i < 6; i++) dustAt(from.x + dir.x * i * 5, from.y + dir.y * i * 5, from.z + dir.z * i * 5, 2, 1);
+}
+
+// ---------- mini-map: top-down view of the destructible area, north up ----------
+const miniEl = document.getElementById('mini');
+const miniCanvas = miniEl.querySelector('canvas'), miniCtx = miniCanvas.getContext('2d');
+const miniBase = Object.assign(document.createElement('canvas'), { width: WX, height: WZ });
+const miniBaseCtx = miniBase.getContext('2d');
+const MAT_SRGB = MAT.map((m) => (m ? [(m.color >> 16) & 255, (m.color >> 8) & 255, m.color & 255] : null));
+let miniShown = localStorage.getItem('vw-minimap') !== 'off', miniDestroyed = -1, miniT = 0;
+// colour of the highest voxel in each column, brighter the taller it is
+function renderMiniBase() {
+  const img = miniBaseCtx.createImageData(WX, WZ), d = img.data;
+  for (let z = 0; z < WZ; z++)
+    for (let x = 0; x < WX; x++) {
+      let y = WY - 1, m = 0;
+      for (; y >= 0 && !(m = world.data[(y * WZ + z) * WX + x]); y--);
+      const o = (z * WX + x) * 4, c = MAT_SRGB[m] ?? [24, 24, 28], k = m ? 0.55 + 0.45 * Math.min(1, Math.max(0, y - G + 1) / 40) : 1;
+      d[o] = c[0] * k; d[o + 1] = c[1] * k; d[o + 2] = c[2] * k; d[o + 3] = 255;
+    }
+  miniBaseCtx.putImageData(img, 0, 0);
+}
+function updateMiniMap(dt, now) {
+  miniEl.style.display = miniShown ? 'block' : 'none';
+  if (!miniShown) return;
+  miniT -= dt;
+  if (miniT <= 0 && miniDestroyed !== destroyed) { miniDestroyed = destroyed; miniT = 1; renderMiniBase(); }
+  const S = miniCanvas.width, k = S / (WX * VS);
+  miniCtx.imageSmoothingEnabled = false;
+  miniCtx.drawImage(miniBase, 0, 0, S, S);
+  const p = camera.position;
+  const edge = Math.min(p.x, p.z, WX * VS - p.x, WZ * VS - p.z);
+  const near = edge < 4;
+  miniEl.classList.toggle('edge', near);
+  miniCtx.lineWidth = near ? 6 : 2;
+  miniCtx.strokeStyle = near ? `rgba(255,80,60,${0.55 + 0.45 * Math.sin(now / 110)})` : '#ffffff55';
+  miniCtx.strokeRect(0, 0, S, S);
+  const dir = camera.getWorldDirection(_v);
+  miniCtx.save();
+  miniCtx.translate(THREE.MathUtils.clamp(p.x * k, 0, S), THREE.MathUtils.clamp(p.z * k, 0, S));
+  miniCtx.rotate(Math.atan2(dir.z, dir.x));
+  miniCtx.beginPath();
+  miniCtx.moveTo(8, 0); miniCtx.lineTo(-5, -5); miniCtx.lineTo(-2, 0); miniCtx.lineTo(-5, 5); miniCtx.closePath();
+  miniCtx.fillStyle = '#ffd23f';
+  miniCtx.strokeStyle = '#000';
+  miniCtx.lineWidth = 1.5;
+  miniCtx.fill();
+  miniCtx.stroke();
+  miniCtx.restore();
 }
 
 // ---------- loot hunt ----------
@@ -1216,6 +1236,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetLevel();
   if (e.code === 'KeyT') setEnvironment(envIndex + 1);
   if (e.code === 'KeyL') { setTorch(!torchOn); toast(`Flashlight ${torchOn ? 'on' : 'off'}`, 1); }
+  if (e.code === 'KeyM') { miniShown = !miniShown; localStorage.setItem('vw-minimap', miniShown ? 'on' : 'off'); toast(`Mini-map ${miniShown ? 'on' : 'off'}`, 1); }
   if (e.code === 'KeyF') { setDetector(!hunt.detector); toast(`Detector sound ${hunt.detector ? 'on' : 'off'}`, 1.2); }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -1340,7 +1361,9 @@ scene.add(beam);
 function setTool(i) {
   tool = i;
   viewmodels.forEach((v, j) => (v.visible = j === i));
-  document.querySelectorAll('.tool').forEach((el, j) => el.classList.toggle('active', j === i));
+  document.querySelectorAll('.tool').forEach((el, j) => { el.classList.toggle('active', j === i); el.querySelector('i').style.height = '0'; });
+  toolName.innerHTML = `${TOOLS[i].name}<small>${TOOLS[i].desc}</small>`;
+  toolShowT = 2.5;
 }
 
 function aimRay(maxDist) {
@@ -1362,12 +1385,15 @@ function useTool() {
   if (tool === 6) { launchProjectile('blackhole', 14); return; }
   if (tool === 5) { fireRailgun(); return; }
   const hit = aimRay(T.range);
+  const wh = wires.rayHit(camera.position, camera.getWorldDirection(new THREE.Vector3()), T.range);
+  const onWire = wh && (!hit || wh.dist < hit.point.distanceTo(camera.position));
   if (tool === 1) {
-    const end = hit ? hit.point : camera.position.clone().addScaledVector(camera.getWorldDirection(new THREE.Vector3()), T.range);
+    const end = onWire ? wh.point : hit ? hit.point : camera.position.clone().addScaledVector(camera.getWorldDirection(new THREE.Vector3()), T.range);
     const start = new THREE.Vector3(0.32, -0.25, -0.9).applyMatrix4(camera.matrixWorld);
     beam.geometry.setFromPoints([start, end]);
     beam.material.opacity = 1;
   }
+  if (onWire) { wires.cut(wh.point, 0.05); return; }
   if (!hit) return;
   const owner = colliderOwner.get(hit.collider.handle);
   const p = hit.point.clone().addScaledVector(hit.dir, 0.1);
@@ -1415,7 +1441,29 @@ const hud = {
   endTitle: document.querySelector('#end h1'),
   endBody: document.querySelector('#end p'),
 };
-hud.toolbar.innerHTML = TOOLS.map((t) => `<div class="tool"><b>${t.key}</b> ${t.name}<small>${t.desc}</small></div>`).join('');
+// 24×24 line icons for the hotbar
+const TOOL_ICONS = [
+  '<path d="M4 5h9v6H4zM13 8h2M15 8l5 12"/>',
+  '<path d="M3 8h14l2 2v3H9l-1 7H4l1-7H3zM17 9h4"/>',
+  '<circle cx="11" cy="14" r="6"/><path d="M15 9l2-2M17 7c1-2 3-2 4-1"/>',
+  '<circle cx="12" cy="11" r="6"/><path d="M8 16v4M12 17v3M16 16v4"/>',
+  '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7" stroke-dasharray="3 3"/>',
+  '<path d="M2 9h18M2 15h18M20 7v10M5 12h17"/>',
+  '<path d="M12 12m-2 0a2 2 0 1 0 4 0a4 4 0 1 0 -8 0a6 6 0 1 0 12 0a8 8 0 1 0 -16 0"/>',
+];
+hud.toolbar.innerHTML = TOOLS.map((t, i) =>
+  `<div class="tool" title="${t.name}"><b>${t.key}</b><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TOOL_ICONS[i]}</svg><i></i></div>`).join('');
+const toolName = document.getElementById('toolname');
+const toolSlots = [...hud.toolbar.children];
+let toolShowT = 0;
+// name and description float above the bar for a moment after switching; the bar dims when idle
+function updateToolbar(dt) {
+  toolShowT -= dt;
+  toolName.style.opacity = toolShowT > 0 ? Math.min(1, toolShowT / 0.4) : 0;
+  hud.toolbar.classList.toggle('idle', toolShowT < -1.5);
+  const cd = TOOLS[tool].cooldown;
+  toolSlots[tool].querySelector('i').style.height = `${Math.max(0, cooldown / cd) * 100}%`;
+}
 controls.addEventListener('lock', () => (hud.overlay.style.display = 'none'));
 function showOverlay() {
   hud.overlay.style.display = 'flex';
@@ -1448,11 +1496,13 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   setSpawn(map.spawn);
   placeLamps(map.lamps);
   buildScenery(map);
-  buildWires();
+  wires.build(WIRES);
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
   createItems(specs);
+  miniDestroyed = -1;
+  miniT = 0;
   Object.assign(hunt, { seed, time: 0, points: 0, found: 0, over: false, started: false });
   hud.intro.style.display = 'block';
   hud.end.style.display = 'none';
@@ -1863,6 +1913,9 @@ function frame(now) {
   if (steps === 3) acc = 0;
   updateBombs(dt);
   updateProjectiles(dt);
+  wires.update(dt);
+  updateMiniMap(dt, now);
+  updateToolbar(dt);
   if (steps) checkImpacts(dt);
   structuralTimer -= dt;
   if (structuralTimer <= 0 && pendingStructural.length) { runStructural(); structuralTimer = 0.15; }
@@ -1925,6 +1978,8 @@ document.getElementById('loading').remove();
 
 // test hooks
 window.__game = {
+  wireMid: (i) => { const r = wires.ropes[i], p = r.pts[r.pts.length >> 1]; return [p.x, p.y, p.z]; },
+  wires: () => ({ ropes: wires.ropes.length, active: wires.ropes.filter((r) => r.active).length, pinned: wires.ropes.filter((r) => r.pinA && r.pinB).length, moving: wires.ropes.filter((r) => r.active).map((r) => [r.pts.length, !!r.pinA, !!r.pinB, Math.sqrt(r.moved ?? 0).toFixed(4), r.pts[r.pts.length - 1].y.toFixed(2)]) }),
   explode: (x, y, z, r) => explode(new THREE.Vector3(x, y, z), r),
   stats: () => ({ impacts: impactCount, maxDv: +maxImpactDv.toFixed(1), debris: debris.length, destroyed, pct: (100 * destroyed) / initialDestructible, fps }),
   look: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); player.body.setTranslation({ x, y: y - 0.62, z }, true); player.body.setNextKinematicTranslation({ x, y: y - 0.62, z }); player.vy = 0; player.kick.set(0, 0, 0); },
