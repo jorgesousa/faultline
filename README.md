@@ -12,16 +12,16 @@ npm start          # serves on http://127.0.0.1:8931
 ## Controls
 
 WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
-1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · R new map · Esc pause
+1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · R restart · Esc pause
 
 ## Loot hunt
 
 - Each map hides 11 items (`src/loot.js`, seeded so a map can be reproduced): gold bars (+1), gems (+2) and a flag (+3).
-- 16 crates (planks, brick or concrete) are placed through the buildings and in the open; 7 hold loot, the rest are decoys. Crates have 2-voxel walls, so you can't grab loot through them.
-- Fixed hiding places: the sealed house attic, the water tower tank, inside the chimney and a pocket in the chimney's concrete foundation.
+- Crates (planks, brick or concrete) are placed through the buildings and in the open; 7 hold loot, the rest are decoys. Crates have 2-voxel walls, so you can't grab loot through them.
+- Each map also has fixed hiding places (e.g. the church bell tower, a car boot, a statue plinth, a sealed attic, the water tower tank).
 - Loot items are physics bodies: they fall with collapsing floors, ride toppling structures and get thrown by blasts and tool hits. Lost items return to where they started.
 - Walk over loot to collect it. The detector bar (and clicking sound) gets hotter near the closest item.
-- No time limit: a stopwatch runs (paused while the game is paused) until every item is found. The 10 fastest times are kept in a leaderboard (saved in the browser) shown on the start and finish screens.
+- No time limit: a stopwatch runs (paused while the game is paused) until every item is found. The 10 fastest times per map are kept in a leaderboard (saved in the browser) shown on the start and finish screens.
 - The detector sound can be switched off with `F` or the button on the menu; the choice is remembered.
 
 ## Weapons
@@ -47,7 +47,7 @@ Press `T` (or use the buttons in the menu) to change the time of day and weather
 
 ## How it works
 
-- **World**: a 160×80×160 grid of 25 cm voxels (`src/world.js`), each storing a material id with colour, hardness and density.
+- **World**: a 256×80×256 grid (64×20×64 m) of 25 cm voxels (`src/world.js`), each storing a material id with colour, hardness and density.
 - **Rendering**: the world is split into 16³ chunks. Each chunk is meshed with only exposed faces and per-vertex ambient occlusion (`src/mesher.js`). Only changed chunks are rebuilt.
 - **Collision**: each chunk's solid voxels are merged into a few boxes (greedy box decomposition) and used as static Rapier colliders.
 - **Destruction**: tools remove voxels in a sphere if the tool is strong enough for the material. Glass shatters over a wider radius.
@@ -59,9 +59,14 @@ Press `T` (or use the buttons in the menu) to change the time of day and weather
   - *Load* – the weight above each cut must not exceed the `strength` of the cells crossing it. Otherwise those supports crumble and the part above drops (e.g. legs thinned with the hammer).
 - **Impact damage**: when debris changes velocity sharply, including its spin, it carves at its strongest Rapier contact points. Heavier, faster hits do more damage and can break harder materials, so falling structures smash themselves and whatever they land on.
 
-## Level
+## Maps
 
-Procedurally built in `src/level.js`: brick house, concrete tower with steel corner columns, footbridge, wooden barn, water tower on stilts, brick chimney and a ruined arch wall.
+Pick a map on the start menu (remembered between visits). Maps are built procedurally in `src/level.js` and registered in `MAPS` with their spawn, lamps, water, loot spots and backdrop.
+
+- **Riverside town**: a high street with terraced houses, back gardens, a corner shop, a church with a bell tower, a pub, a café and parked cars. A stone bridge crosses the river to a boathouse, a fishing pier and a park. A low-poly town continues beyond the edges.
+- **Old farm**: the original brick house, concrete tower with steel columns, footbridge, wooden barn, water tower on stilts, brick chimney and ruined arch wall, now with a country road, fences and trees.
+
+To add a map, write a `build(w)` function and add an entry to `MAPS`.
 
 ## License
 

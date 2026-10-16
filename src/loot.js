@@ -1,5 +1,4 @@
-import { M, VS } from './world.js';
-import { G } from './level.js';
+import { VS } from './world.js';
 
 export const LOOT_KINDS = {
   gold: { name: 'Gold bar', value: 1, color: 0xffc83d },
@@ -16,33 +15,15 @@ function mulberry32(seed) {
   };
 }
 
-// Crates are 6×6×6 voxels with 2-voxel walls around a 2×2×2 hollow, so loot can't be grabbed through the wall.
-// [x, floorY, z, material] — floorY is the first empty layer above the floor the crate stands on.
-const CRATES = [
-  // brick house: ground floor, first floor
-  [44, G + 1, 29, M.planks], [40, G + 1, 46, M.planks],
-  [22, G + 13, 28, M.planks], [44, G + 13, 42, M.planks],
-  // concrete tower: each storey and the roof
-  [87, G + 1, 28, M.concrete], [74, G + 13, 28, M.planks], [88, G + 25, 38, M.brick],
-  [76, G + 37, 30, M.concrete], [75, G + 49, 41, M.brick],
-  // barn
-  [132, G + 1, 42, M.planks], [114, G + 1, 44, M.planks], [125, G + 1, 30, M.planks],
-  // bunkers out in the open
-  [8, G, 84, M.brick], [140, G, 84, M.brick], [80, G, 140, M.concrete], [20, G, 140, M.brick],
-];
-
-// Places that are sealed by the level itself. Coordinates are voxels; y is the layer the item rests on.
-const SPECIAL = [
-  { x: 36, y: G + 25, z: 40, kind: 'gem', where: 'house attic' },
-  { x: 38.5, y: G + 27, z: 106.5, kind: 'flag', where: 'water tower tank' },
-  { x: 117.5, y: G + 6, z: 111.5, kind: 'gem', where: 'inside the chimney' },
-  { x: 115, y: G + 1, z: 112, kind: 'gold', where: 'chimney foundation', pocket: true },
-];
-
+// Each map lists its hiding places (see level.js):
+//  crates: [x, floorY, z, material] — 6×6×6 voxels with 2-voxel walls around a 2×2×2 hollow,
+//          floorY being the first empty layer above the floor the crate stands on.
+//  special: places sealed by the level itself; y is the layer the item rests on.
 const LOOT_CRATES = 7;
 
 /** Adds crates and pockets to an already built level and returns the hidden loot (positions in metres). */
-export function placeLoot(w, seed) {
+export function placeLoot(w, seed, map) {
+  const { crates: CRATES, special: SPECIAL } = map;
   const rnd = mulberry32(seed);
   const order = CRATES.map((c, i) => [rnd(), i]).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
   const filled = new Set(order.slice(0, LOOT_CRATES));
@@ -62,4 +43,3 @@ export function placeLoot(w, seed) {
   return items;
 }
 
-export const CRATE_COUNT = CRATES.length;

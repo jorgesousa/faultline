@@ -3,7 +3,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from './world.js';
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
-import { buildLevel, countDestructible, G } from './level.js';
+import { buildLevel, countDestructible, G, MAPS } from './level.js';
 import { analyzeStructures } from './structure.js';
 import { placeLoot, LOOT_KINDS } from './loot.js';
 
@@ -34,13 +34,16 @@ sun.position.copy(CENTER).add(new THREE.Vector3(-18, 34, -12));
 sun.target.position.copy(CENTER);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
-Object.assign(sun.shadow.camera, { left: -32, right: 32, top: 32, bottom: -32, near: 1, far: 100 });
+Object.assign(sun.shadow.camera, { left: -46, right: 46, top: 46, bottom: -46, near: 1, far: 140 });
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
 
+// ground beyond the play area, with a hole so dug-out terrain (like a river bed) stays visible
+const outerShape = new THREE.Shape().moveTo(-300, -300).lineTo(300, -300).lineTo(300, 300).lineTo(-300, 300).lineTo(-300, -300);
+outerShape.holes.push(new THREE.Path().moveTo(-WX * VS / 2, -WZ * VS / 2).lineTo(-WX * VS / 2, WZ * VS / 2).lineTo(WX * VS / 2, WZ * VS / 2).lineTo(WX * VS / 2, -WZ * VS / 2).lineTo(-WX * VS / 2, -WZ * VS / 2));
 const outerGround = new THREE.Mesh(
-  new THREE.PlaneGeometry(600, 600),
+  new THREE.ShapeGeometry(outerShape),
   new THREE.MeshLambertMaterial({ color: new THREE.Color(MAT[M.ground].color).multiplyScalar(0.92) })
 );
 outerGround.rotation.x = -Math.PI / 2;
@@ -985,9 +988,11 @@ function toast(html, secs = 2.5) {
 }
 
 const fmtTime = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
-const BOARD_KEY = 'vw-leaderboard';
+let mapIndex = Math.max(0, MAPS.findIndex((m) => m.id === localStorage.getItem('vw-map')));
+// the farm keeps the original key so earlier times survive
+const boardKey = () => (MAPS[mapIndex].id === 'farm' ? 'vw-leaderboard' : `vw-leaderboard-${MAPS[mapIndex].id}`);
 function loadBoard() {
-  try { return JSON.parse(localStorage.getItem(BOARD_KEY)) ?? []; } catch { return []; }
+  try { return JSON.parse(localStorage.getItem(boardKey())) ?? []; } catch { return []; }
 }
 function renderBoard(highlight) {
   const board = loadBoard();
@@ -996,6 +1001,7 @@ function renderBoard(highlight) {
       `<td>${new Date(r.at).toLocaleDateString()} ${new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td><td>${r.destruction}% destroyed</td></tr>`).join('')}</table>`
     : '<p class="empty">No results yet. Find all the loot to set the first time!</p>';
   document.querySelectorAll('.board').forEach((el) => (el.innerHTML = html));
+  document.querySelectorAll('.board-title').forEach((el) => (el.textContent = `🏆 Best times · ${MAPS[mapIndex].name.replace(/^\S+\s/, '')}`));
 }
 
 function setDetector(on) {
@@ -1009,7 +1015,7 @@ function endHunt() {
   hunt.over = true;
   const entry = { time: hunt.time, at: Date.now(), destruction: +((100 * destroyed) / initialDestructible).toFixed(1) };
   const board = [...loadBoard(), entry].sort((a, b) => a.time - b.time).slice(0, 10);
-  localStorage.setItem(BOARD_KEY, JSON.stringify(board));
+  localStorage.setItem(boardKey(), JSON.stringify(board));
   const rank = board.indexOf(entry) + 1;
   hud.endTitle.textContent = 'All loot found!';
   hud.endBody.innerHTML = `Your time <b style="font-size:22px">${fmtTime(hunt.time)}</b> · ${hunt.points} points` +
@@ -1042,7 +1048,10 @@ function updateHunt(dt) {
 }
 
 // ---------- player ----------
-const SPAWN = new THREE.Vector3(62 * VS, G * VS + 1.0, 6 * VS);
+const SPAWN = new THREE.Vector3();
+let spawnYaw = 0;
+function setSpawn({ x, z, yaw }) { SPAWN.set((x + 0.5) * VS, G * VS + 1.0, (z + 0.5) * VS); spawnYaw = yaw; }
+setSpawn(MAPS[mapIndex].spawn);
 const player = { body: null, col: null, vy: 0, grounded: false, kick: new THREE.Vector3() };
 player.body = physics.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(SPAWN.x, SPAWN.y, SPAWN.z));
 player.col = physics.createCollider(RAPIER.ColliderDesc.capsule(0.5, 0.3), player.body);
@@ -1287,12 +1296,15 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   railBeams.length = 0;
   pendingStructural.length = 0;
   clearItems();
-  buildLevel(world);
-  const specs = placeLoot(world, seed);
+  const map = MAPS[mapIndex];
+  buildLevel(world, map);
+  const specs = placeLoot(world, seed, map);
+  setSpawn(map.spawn);
+  placeLamps(map.lamps);
+  buildScenery(map);
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
-  reviveLamps();
   createItems(specs);
   Object.assign(hunt, { seed, time: 0, points: 0, found: 0, over: false, started: false });
   hud.intro.style.display = 'block';
@@ -1301,7 +1313,16 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   player.vy = 0;
   player.kick.set(0, 0, 0);
   camera.position.set(SPAWN.x, SPAWN.y + 0.62, SPAWN.z);
-  camera.rotation.set(0, Math.PI, 0);
+  camera.rotation.set(0, spawnYaw, 0);
+}
+
+function setMap(i) {
+  mapIndex = (i + MAPS.length) % MAPS.length;
+  localStorage.setItem('vw-map', MAPS[mapIndex].id);
+  document.querySelectorAll('.map-btn').forEach((b) => b.classList.toggle('on', +b.dataset.i === mapIndex));
+  document.querySelectorAll('.map-desc').forEach((el) => (el.textContent = MAPS[mapIndex].desc));
+  resetLevel();
+  renderBoard();
 }
 
 
@@ -1376,23 +1397,111 @@ camera.add(torch, torch.target);
 let torchOn = false, lastAutoTorch = null;
 function setTorch(on) { torchOn = on; beep(on ? 1500 : 900, 0.03, 0.04, 'square'); }
 
-// ceiling lamps inside the buildings: [x, ceilingY, z] in voxels; they die with their ceiling
-const LAMP_SPOTS = [[36, G + 12, 33], [36, G + 12, 47], [36, G + 24, 33], [36, G + 24, 47],
-  [84, G + 12, 38], [84, G + 24, 38], [84, G + 36, 38], [84, G + 48, 38], [120, G + 12, 39], [134, G + 12, 39]];
+// lamps: [x, y, z] in voxels; the light hangs under voxel (x, y, z) and dies when it is destroyed.
+// There are always LAMP_N lights so switching maps never recompiles shaders; unused ones stay dark.
+const LAMP_N = 10;
 const bulbGeo = new THREE.SphereGeometry(0.09, 10, 8);
-const lamps = LAMP_SPOTS.map(([x, y, z]) => {
+const lamps = Array.from({ length: LAMP_N }, () => {
   const light = new THREE.SpotLight(0xffc27a, 0, 7, 1.15, 0.8, 1);
-  light.position.set((x + 0.5) * VS, y * VS - 0.25, (z + 0.5) * VS);
-  light.target.position.copy(light.position).add(new THREE.Vector3(0, -3, 0));
   const bulb = new THREE.Mesh(bulbGeo, new THREE.MeshBasicMaterial({ color: 0xfff0c8 }));
-  bulb.position.copy(light.position);
   const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.2, 4), new THREE.MeshBasicMaterial({ color: 0x111111 }));
   cord.position.y = 0.14;
   bulb.add(cord);
   scene.add(light, light.target, bulb);
-  return { x, y, z, light, bulb, dead: false, flick: 0 };
+  return { x: 0, y: 0, z: 0, light, bulb, dead: true, flick: 0 };
 });
-function reviveLamps() { for (const l of lamps) { l.dead = false; l.flick = 0; l.bulb.visible = true; } }
+function placeLamps(spots) {
+  lamps.forEach((l, i) => {
+    const s = spots[i];
+    l.flick = 0;
+    l.dead = !s;
+    l.bulb.visible = !!s;
+    l.light.intensity = 0;
+    if (!s) return;
+    [l.x, l.y, l.z] = s;
+    l.light.position.set((l.x + 0.5) * VS, l.y * VS - 0.25, (l.z + 0.5) * VS);
+    l.light.target.position.copy(l.light.position).add(new THREE.Vector3(0, -3, 0));
+    l.bulb.position.copy(l.light.position);
+  });
+}
+
+// water surfaces, plus streets, rivers and buildings beyond the edge so maps don't float in a field
+const scenery = new THREE.Group();
+scene.add(scenery);
+const waterMat = new THREE.MeshLambertMaterial({ color: 0x2c5d74, transparent: true, opacity: 0.8, depthWrite: false });
+const farWaterMat = new THREE.MeshLambertMaterial({ color: 0x2c5d74 });
+const asphaltMat = new THREE.MeshLambertMaterial({ color: MAT[M.asphalt].color });
+const paveMat = new THREE.MeshLambertMaterial({ color: MAT[M.pavement].color });
+function buildScenery(map) {
+  for (const c of [...scenery.children]) { scenery.remove(c); c.geometry.dispose(); }
+  const L = WX * VS, D = WZ * VS, gy = G * VS, FAR = 320;
+  const plane = (x0, z0, x1, z1, y, mat) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0), mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set((x0 + x1) / 2, y, (z0 + z1) / 2);
+    m.receiveShadow = true;
+    scenery.add(m);
+  };
+  const bd = map.backdrop, strips = [];
+  for (const wt of map.water) {
+    plane(0, wt.z0 * VS, L, wt.z1 * VS, wt.y * VS, waterMat);
+    for (const [x0, x1] of [[-FAR, 0], [L, L + FAR]]) plane(x0, wt.z0 * VS, x1, wt.z1 * VS, gy - 0.01, farWaterMat);
+  }
+  for (const [z0, z1] of bd.rivers ?? []) strips.push({ z0: z0 * VS - 2.5, z1: z1 * VS + 2.5 });
+  for (const [z0, z1] of bd.roads ?? []) {
+    for (const [x0, x1] of [[-FAR, 0], [L, L + FAR]]) {
+      plane(x0, z0 * VS, x1, z1 * VS, gy - 0.01, asphaltMat);
+      if (bd.style === 'town') { plane(x0, z0 * VS - 2, x1, z0 * VS, gy - 0.008, paveMat); plane(x0, z1 * VS, x1, z1 * VS + 2, gy - 0.008, paveMat); }
+    }
+    strips.push({ z0: z0 * VS - 2.5, z1: z1 * VS + 2.5 });
+  }
+  for (const [x0, x1] of bd.sideRoads ?? []) {
+    plane(x0 * VS, D, x1 * VS, D + FAR, gy - 0.01, asphaltMat);
+    strips.push({ x0: x0 * VS - 2.5, x1: x1 * VS + 2.5, zMin: D });
+  }
+  const blocked = (x0, z0, x1, z1) =>
+    (x1 > -1.5 && x0 < L + 1.5 && z1 > -1.5 && z0 < D + 1.5) ||
+    strips.some((s) => (s.z0 !== undefined ? z1 > s.z0 && z0 < s.z1 : x1 > s.x0 && x0 < s.x1 && z1 > s.zMin));
+
+  let seed = 1234567;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const boxes = [], roofs = [], trees = [];
+  const CELL = 9;
+  for (let cz = -54; cz < D + 54; cz += CELL)
+    for (let cx = -54; cx < L + 54; cx += CELL) {
+      if (blocked(cx, cz, cx + CELL, cz + CELL)) continue;
+      if (bd.style === 'town') {
+        const w = CELL - 0.6 - rnd() * 2, d = CELL - 0.6 - rnd() * 2, h = 4 + Math.floor(rnd() * 3) * 3 + (rnd() < 0.15 ? 6 : 0);
+        boxes.push({ x: cx + CELL / 2, z: cz + CELL / 2, w, d, h, c: [0xa5553b, 0xe6d6a8, 0x9fc0d8, 0xe0a296, 0x9c9b96, 0xc9b79c][Math.floor(rnd() * 6)] });
+        if (rnd() < 0.6) roofs.push({ x: cx + CELL / 2, z: cz + CELL / 2, w, d, y: gy + h, rot: rnd() < 0.5 });
+        if (rnd() < 0.2) trees.push({ x: cx + rnd() * CELL, z: cz + rnd() * CELL, s: 0.8 + rnd() * 0.5 });
+      } else {
+        const n = rnd() < 0.08 ? 0 : 1 + Math.floor(rnd() * 3);
+        for (let i = 0; i < n; i++) trees.push({ x: cx + rnd() * CELL, z: cz + rnd() * CELL, s: 0.8 + rnd() * 0.7 });
+        if (n === 0) {
+          const w = 8 + rnd() * 4, d = 6;
+          boxes.push({ x: cx + CELL / 2, z: cz + CELL / 2, w: w * 0.9, d, h: 4, c: rnd() < 0.5 ? 0x8f6036 : 0xa5553b });
+          roofs.push({ x: cx + CELL / 2, z: cz + CELL / 2, w: w * 0.9, d, y: gy + 4, rot: false });
+        }
+      }
+    }
+  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color();
+  const inst = (geo, list, set, color) => {
+    if (!list.length) return;
+    const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial(), list.length);
+    list.forEach((o, i) => { set(o); m.setMatrixAt(i, mtx); m.setColorAt(i, col.set(color(o))); });
+    m.castShadow = m.receiveShadow = true;
+    scenery.add(m);
+  };
+  const up = new THREE.Vector3(0, 1, 0), pos = new THREE.Vector3(), scl = new THREE.Vector3();
+  inst(new THREE.BoxGeometry(1, 1, 1), boxes, (o) => mtx.compose(pos.set(o.x, gy + o.h / 2, o.z), q.identity(), scl.set(o.w, o.h, o.d)), (o) => o.c);
+  // triangular prism along x with its base at y = 0, 1 × 1 × 1
+  const prism = new THREE.CylinderGeometry(0.5, 0.5, 1, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).translate(0, 0.25, 0).scale(1, 1 / 0.75, 1 / 0.866);
+  inst(prism, roofs, (o) => mtx.compose(pos.set(o.x, o.y, o.z), q.setFromAxisAngle(up, o.rot ? Math.PI / 2 : 0),
+    scl.set((o.rot ? o.d : o.w) + 0.6, 2.4, (o.rot ? o.w : o.d) + 0.6)), () => 0x7b3a31);
+  inst(new THREE.ConeGeometry(2.2, 5, 7).translate(0, 4.5, 0), trees, (o) => mtx.compose(pos.set(o.x, gy, o.z), q.identity(), scl.setScalar(o.s)), () => 0x41693a);
+  inst(new THREE.CylinderGeometry(0.2, 0.25, 2.2, 5).translate(0, 1.1, 0), trees, (o) => mtx.compose(pos.set(o.x, gy, o.z), q.identity(), scl.setScalar(o.s)), () => 0x6b4a2c);
+}
 
 // rain that stops on roofs and only gets in through holes you make
 const RAIN_N = 1800;
@@ -1454,7 +1563,7 @@ function setEnvironment(i, quiet = false) {
   localStorage.setItem('vw-env', ENVS[envIndex].id);
   lastAutoTorch = null;
   envBlend = 0;
-  document.querySelectorAll('.env-btn').forEach((b) => b.classList.toggle('on', +b.dataset.i === envIndex));
+  document.querySelectorAll('.env-btn:not(.map-btn)').forEach((b) => b.classList.toggle('on', +b.dataset.i === envIndex));
   if (!quiet) toast(ENVS[envIndex].name, 1.4);
 }
 
@@ -1577,7 +1686,12 @@ function updateEnvironment(dt) {
 }
 const _c = new THREE.Color();
 let frameNo = 0;
-document.querySelectorAll('.envs').forEach((box) => {
+document.querySelectorAll('.maps').forEach((box) => {
+  box.innerHTML = MAPS.map((m, i) => `<button class="env-btn map-btn${i === mapIndex ? ' on' : ''}" data-i="${i}">${m.name}</button>`).join('');
+  box.addEventListener('click', (ev) => { ev.stopPropagation(); const b = ev.target.closest('.map-btn'); if (b && +b.dataset.i !== mapIndex) setMap(+b.dataset.i); });
+});
+document.querySelectorAll('.map-desc').forEach((el) => (el.textContent = MAPS[mapIndex].desc));
+document.querySelectorAll('.envs:not(.maps)').forEach((box) => {
   box.innerHTML = ENVS.map((e, i) => `<button class="env-btn" data-i="${i}">${e.name}</button>`).join('');
   box.addEventListener('click', (ev) => { ev.stopPropagation(); const b = ev.target.closest('.env-btn'); if (b) setEnvironment(+b.dataset.i, true); });
 });
@@ -1677,5 +1791,7 @@ window.__game = {
   board: () => loadBoard(),
   tp: (x, y, z) => { player.body.setTranslation({ x, y, z }, true); player.body.setNextKinematicTranslation({ x, y, z }); player.vy = 0; },
   setTime: (t) => (hunt.time = t),
+  map: (i) => setMap(i),
+  mapId: () => MAPS[mapIndex].id,
   VS, G,
 };

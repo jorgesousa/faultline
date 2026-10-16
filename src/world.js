@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 export const VS = 0.25; // voxel size in metres
-export const WX = 160, WY = 80, WZ = 160;
+export const WX = 256, WY = 80, WZ = 256;
 export const CS = 16; // chunk size in voxels
 export const NCX = WX / CS, NCY = WY / CS, NCZ = WZ / CS;
 
@@ -20,6 +20,15 @@ export const MAT = [
   { name: 'plaster', color: 0xe2dacb, hard: 1, density: 1.2, span: 8, strength: 80 },
   { name: 'asphalt', color: 0x3a3c40, hard: 99, density: 2.0, anchor: true, span: 99, strength: 1e9 },
   { name: 'planks', color: 0xb98b56, hard: 1, density: 0.6, span: 16, strength: 120 },
+  { name: 'pavement', color: 0xa29d94, hard: 99, density: 2.2, anchor: true, span: 99, strength: 1e9 },
+  { name: 'stone', color: 0xb9ad92, hard: 3, density: 2.5, span: 12, strength: 900 },
+  { name: 'render', color: 0xe6d6a8, hard: 2, density: 1.9, span: 10, strength: 500 },
+  { name: 'render2', color: 0x9fc0d8, hard: 2, density: 1.9, span: 10, strength: 500 },
+  { name: 'render3', color: 0xe0a296, hard: 2, density: 1.9, span: 10, strength: 500 },
+  { name: 'leaves', color: 0x4f7f3a, hard: 0, density: 0.3, span: 10, strength: 40 },
+  { name: 'paint', color: 0xb8262c, hard: 2, density: 3.0, span: 20, strength: 600 },
+  { name: 'paint2', color: 0x2c5aa8, hard: 2, density: 3.0, span: 20, strength: 600 },
+  { name: 'tyre', color: 0x1d1e21, hard: 2, density: 1.2, span: 8, strength: 600 },
 ];
 export const M = Object.fromEntries(MAT.map((m, i) => [m?.name, i]).filter(([n]) => n));
 
