@@ -3,9 +3,8 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from './world.js';
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
-import { buildLevel, countDestructible, G, MAPS, WIRES } from './level.js';
+import { buildLevel, countDestructible, G, MAPS } from './level.js';
 import { analyzeStructures } from './structure.js';
-import { Wires } from './wires.js';
 import { placeLoot, LOOT_KINDS } from './loot.js';
 
 await RAPIER.init();
@@ -185,7 +184,6 @@ const world = new VoxelWorld();
 const wget = (x, y, z) => world.get(x, y, z);
 const chunks = Array.from({ length: NCX * NCY * NCZ }, () => ({ mesh: null, colliders: [] }));
 const dirty = new Set();
-const wires = new Wires(scene, world, (p) => wireSparks(p));
 const chunkOf = (x, y, z) => ((Math.floor(y / CS) * NCZ + Math.floor(z / CS)) * NCX + Math.floor(x / CS));
 
 function markDirty(x, y, z) {
@@ -554,7 +552,6 @@ function splitDebris(deb) {
 // ---------- destruction API ----------
 function destroyAt(p, r, power, glassMul = 2.2, end = null) {
   const removed = carveWorld(p, r, power, glassMul, end);
-  wires.cut(p, r + 0.1, end);
   if (removed.length) {
     detachFloating(removed);
     for (const c of removed) pendingStructural.push(c);
@@ -704,7 +701,6 @@ function explode(p, r = 2.2, push = 6, power = 3, color = 0xffb060) {
     deb.body.applyImpulseAtPoint({ x: _v.x * k, y: _v.y * k, z: _v.z * k },
       { x: t.x + (Math.random() - 0.5) * deb.radius, y: t.y + (Math.random() - 0.5) * deb.radius, z: t.z + (Math.random() - 0.5) * deb.radius }, true);
   }
-  wires.blast(p, R, push);
   for (const b of bombs) if (b.fuse > 0.12 && distTo(b.body.translation(), p) < R) b.fuse = 0.12;
   for (const s of projectiles) if (s.kind === 'sticky' && s.fuse > 0.12 && distTo(s.pos, p) < R) s.fuse = 0.12;
   for (const it of items) {
@@ -943,12 +939,6 @@ function updateProjectiles(dt) {
 
 const railBeams = [];
 const RAIL_LEN = 30;
-function wireSparks(p) {
-  for (let i = 0; i < 30; i++)
-    sparkle.spawn(p.x, p.y, p.z, (Math.random() - 0.5) * 5, Math.random() * 3, (Math.random() - 0.5) * 5, 0.3 + Math.random() * 0.5, 1, 3, 2.6, 1.2);
-  beep(2600, 0.04, 0.04, 'square');
-  beep(1900, 0.05, 0.03, 'square', 0.05);
-}
 
 function fireRailgun() {
   const T = TOOLS[5];
@@ -968,7 +958,6 @@ function fireRailgun() {
   beep(120, 0.4, 0.1, 'square', 0.02);
   shake = Math.max(shake, 0.25);
   player.kick.addScaledVector(dir, -2.5);
-  wires.cut(start, 0.3, to);
   if (!hit) return;
   for (let i = 0; i < 60; i++) {
     const k = Math.random();
@@ -1385,15 +1374,12 @@ function useTool() {
   if (tool === 6) { launchProjectile('blackhole', 14); return; }
   if (tool === 5) { fireRailgun(); return; }
   const hit = aimRay(T.range);
-  const wh = wires.rayHit(camera.position, camera.getWorldDirection(new THREE.Vector3()), T.range);
-  const onWire = wh && (!hit || wh.dist < hit.point.distanceTo(camera.position));
   if (tool === 1) {
-    const end = onWire ? wh.point : hit ? hit.point : camera.position.clone().addScaledVector(camera.getWorldDirection(new THREE.Vector3()), T.range);
+    const end = hit ? hit.point : camera.position.clone().addScaledVector(camera.getWorldDirection(new THREE.Vector3()), T.range);
     const start = new THREE.Vector3(0.32, -0.25, -0.9).applyMatrix4(camera.matrixWorld);
     beam.geometry.setFromPoints([start, end]);
     beam.material.opacity = 1;
   }
-  if (onWire) { wires.cut(wh.point, 0.05); return; }
   if (!hit) return;
   const owner = colliderOwner.get(hit.collider.handle);
   const p = hit.point.clone().addScaledVector(hit.dir, 0.1);
@@ -1496,7 +1482,6 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   setSpawn(map.spawn);
   placeLamps(map.lamps);
   buildScenery(map);
-  wires.build(WIRES);
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
@@ -1913,7 +1898,6 @@ function frame(now) {
   if (steps === 3) acc = 0;
   updateBombs(dt);
   updateProjectiles(dt);
-  wires.update(dt);
   updateMiniMap(dt, now);
   updateToolbar(dt);
   if (steps) checkImpacts(dt);
@@ -1978,8 +1962,6 @@ document.getElementById('loading').remove();
 
 // test hooks
 window.__game = {
-  wireMid: (i) => { const r = wires.ropes[i], p = r.pts[r.pts.length >> 1]; return [p.x, p.y, p.z]; },
-  wires: () => ({ ropes: wires.ropes.length, active: wires.ropes.filter((r) => r.active).length, pinned: wires.ropes.filter((r) => r.pinA && r.pinB).length, moving: wires.ropes.filter((r) => r.active).map((r) => [r.pts.length, !!r.pinA, !!r.pinB, Math.sqrt(r.moved ?? 0).toFixed(4), r.pts[r.pts.length - 1].y.toFixed(2)]) }),
   explode: (x, y, z, r) => explode(new THREE.Vector3(x, y, z), r),
   stats: () => ({ impacts: impactCount, maxDv: +maxImpactDv.toFixed(1), debris: debris.length, destroyed, pct: (100 * destroyed) / initialDestructible, fps }),
   look: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); player.body.setTranslation({ x, y: y - 0.62, z }, true); player.body.setNextKinematicTranslation({ x, y: y - 0.62, z }); player.vy = 0; player.kick.set(0, 0, 0); },

@@ -341,34 +341,6 @@ function van(w, x, z, alongX, paint, stripe, base = G) {
   wheels(box, base, D, [2, L - 5]);
 }
 
-// wooden utility pole with a crossarm across the wire run; returns the three wire attachment points
-function utilityPole(w, x, z, alongX, base = G + 1, h = 34) {
-  const top = base + h - 1;
-  w.fill(x, base, z, x + 1, top + 1, z + 1, M.wood);
-  const ca = alongX ? (d) => [x, z + d] : (d) => [x + d, z];
-  for (let d = -3; d <= 3; d++) { const [cx, cz] = ca(d); w.fill(cx, top - 2, cz, cx + 1, top - 1, cz + 1, M.wood); }
-  for (const d of [-3, 3]) { const [cx, cz] = ca(d); w.fill(cx, top - 1, cz, cx + 1, top, cz + 1, M.metal); } // insulators
-  return [[...ca(-3), top - 1], [x, z, top], [...ca(3), top - 1]].map(([px, pz, py]) => [px, py, pz]);
-}
-
-// Overhead wires laid by the current map, in world voxel coordinates. They are not voxels: the game
-// draws each one as a rope hanging from the cells next to its anchors (p and q) and simulates it
-// once it is cut or an anchor is destroyed.
-export const WIRES = [];
-function wire(w, p, q, sag) {
-  const ox = w.ox ?? 0, oz = w.oz ?? 0;
-  WIRES.push({ p: [p[0] + ox, p[1], p[2] + oz], q: [q[0] + ox, q[1], q[2] + oz], sag });
-}
-// run cables between consecutive poles, from one attachment to the matching one on the next pole
-function wireRun(w, poles, alongX, sag = 4) {
-  for (let i = 0; i + 1 < poles.length; i++)
-    for (let k = 0; k < 3; k++) {
-      const a = [...poles[i][k]], b = [...poles[i + 1][k]];
-      a[alongX ? 0 : 2] += 1; b[alongX ? 0 : 2] -= 1;
-      wire(w, a, b, sag);
-    }
-}
-
 // 24 × 10 × 10 voxel shipping container (6 × 2.5 × 2.5 m) with corner posts and end doors
 function container(w, x, z, alongX, mat, base = G, open = false) {
   const L = 24, D = 10, H = 10, box = vbox(w, x, z, alongX);
@@ -546,9 +518,6 @@ function buildFarm(world) {
   const barn = { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 10, doorH: 11, winW: 2, winGap: 8, plain: true };
   building(w, 112, 26, 30, 26, 1, barn);
 
-  const farmPoles = [-39, 1, 41, 81, 121, 161, 201].map((x) => utilityPole(w, x, 62, true, G, 32));
-  wireRun(w, farmPoles, true, 4);
-  wire(w, [41, G + 31, 61], [41, G + 20, 54], 1);
   container(w, 150, 30, true, M.container2);
   container(w, 150, 42, true, M.container, G, true);
   palletStack(w, 152, 54, 3, G);
@@ -682,16 +651,6 @@ function buildRiverside(w) {
   w.fill(183, G + 9, 227, 185, G + 18, 229, M.metal);
   w.fill(181, G + 14, 227, 187, G + 15, 229, M.metal);
   bench(w, 170, 210, G);
-  // overhead power and phone lines along the south pavement, with drops to the houses and the pub
-  const poles = [6, 46, 86, 134, 174, 214, 252].map((x) => utilityPole(w, x, 109, true));
-  wireRun(w, poles, true, 4);
-  wire(w, [46, G + 34, 108], [46, G + 22, 70], 3);
-  wire(w, [86, G + 34, 108], [86, G + 22, 70], 3);
-  wire(w, [174, G + 34, 110], [174, G + 23, 115], 1);
-  w.fill(135, G + 24, 108, 138, G + 29, 111, M.metal); // transformer
-  // phone line along the back gardens of the terraces
-  const back = [12, 52, 92, 132, 160].map((x) => utilityPole(w, x, 4, true, G, 30));
-  wireRun(w, back, true, 3);
   bench(w, 194, 210, G);
 }
 
@@ -762,7 +721,6 @@ export const MAPS = [
 
 export function buildLevel(w, map) {
   w.data.fill(0);
-  WIRES.length = 0;
   map.build(w);
 }
 
