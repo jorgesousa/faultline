@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Voxel Wrecker</title>
+  <link rel="icon" href="data:," />
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
+    canvas { display: block; }
+    #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px #0008; pointer-events: none; }
+    #stats { position: fixed; top: 12px; left: 12px; padding: 6px 10px; background: #0008; border-radius: 6px; font-size: 13px; }
+    #toolbar { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+    .tool { background: #0009; border: 2px solid transparent; border-radius: 8px; padding: 5px 9px; font-size: 13px; width: 128px; }
+    .tool small { display: block; opacity: .7; font-size: 10px; margin-top: 2px; }
+    .tool.active { border-color: #ffb347; background: #000c; }
+    #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000a; cursor: pointer; }
+    #overlay .panel { max-width: 460px; max-height: 90vh; overflow: auto; background: #1b1d22; border-radius: 12px; padding: 24px 28px; line-height: 1.5; }
+    #overlay h1 { margin: 0 0 6px; font-size: 28px; color: #ffb347; }
+    #overlay kbd { background: #333; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+    #hunt { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 14px; background: #000a; border-radius: 6px; font-size: 16px; white-space: nowrap; }
+    #signal { position: fixed; bottom: 92px; left: 50%; transform: translateX(-50%); width: 240px; text-align: center; font-size: 12px; text-shadow: 0 1px 2px #000; }
+    #signal div { height: 8px; background: #0009; border-radius: 4px; overflow: hidden; margin-top: 3px; }
+    #signal i { display: block; height: 100%; width: 0; background: #5fc8ff; transition: width .2s, background .2s; }
+    #toast { position: fixed; top: 54px; left: 50%; transform: translateX(-50%); padding: 6px 14px; background: #000b; border-radius: 6px; font-size: 18px; opacity: 0; pointer-events: none; white-space: nowrap; }
+    #toast small { opacity: .7; font-size: 13px; }
+    #end { display: none; }
+    #signal em { font-style: normal; }
+    .sound-toggle { background: #2a2d35; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
+    .sound-toggle:hover { background: #363a44; }
+    .board h3 { margin: 14px 0 4px; font-size: 15px; color: #ffb347; }
+    .board table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .board td { padding: 2px 6px; }
+    .board td:first-child { opacity: .6; width: 24px; }
+    .board td:last-child { opacity: .6; text-align: right; }
+    .board tr.me { background: #ffb34733; }
+    .board .empty { opacity: .6; font-size: 13px; }
+    #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #111; font-size: 20px; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./node_modules/three/build/three.module.js",
+        "three/addons/": "./node_modules/three/examples/jsm/",
+        "@dimforge/rapier3d-compat": "./node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="crosshair"></div>
+  <div id="stats"></div>
+  <div id="toolbar"></div>
+  <div id="hunt"></div>
+  <div id="signal">Detector <em></em> · <span>—</span><div><i></i></div></div>
+  <div id="toast"></div>
+  <div id="overlay">
+    <div class="panel" id="intro">
+      <h1>Voxel Wrecker: Loot Hunt</h1>
+      <p>Gold bars (+1), gems (+2) and a flag (+3) are hidden around town: inside crates (some are empty), sealed rooms, the chimney and the water tower. Smash your way in, walk over the loot to grab it.</p>
+      <p>The <b>detector</b> gets hotter (and clicks faster) as you near the closest loot. Collapses and blasts send loot flying. No time limit: the clock runs until you've found everything. Fastest times go on the leaderboard.</p>
+      <p>
+        <kbd>W A S D</kbd> move · <kbd>Shift</kbd> sprint · <kbd>Space</kbd> jump<br />
+        <kbd>Mouse</kbd> look · <kbd>Left click</kbd> use tool<br />
+        <kbd>1</kbd>–<kbd>7</kbd> / <kbd>wheel</kbd> switch weapon · <kbd>F</kbd> detector sound · <kbd>R</kbd> new map · <kbd>Esc</kbd> pause
+      </p>
+      <p><button class="sound-toggle"></button></p>
+      <h3 style="margin:14px 0 4px;color:#ffb347;font-size:15px">🏆 Best times</h3>
+      <div class="board"></div>
+      <p><b>Click to play</b></p>
+    </div>
+    <div class="panel" id="end">
+      <h1></h1>
+      <p></p>
+      <h3 style="margin:14px 0 4px;color:#ffb347;font-size:15px">🏆 Best times</h3>
+      <div class="board"></div>
+      <p><button class="sound-toggle"></button></p>
+      <p><b>Click to play a new map</b></p>
+    </div>
+  </div>
+  <div id="loading">Building the world…</div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

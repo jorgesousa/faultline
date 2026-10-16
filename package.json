@@ -1,0 +1,16 @@
+{
+  "name": "voxel-wrecker",
+  "version": "1.0.0",
+  "description": "Voxel destruction sandbox (Three.js + Rapier)",
+  "scripts": {
+    "start": "python3 -m http.server 8931 --bind 127.0.0.1"
+  },
+  "keywords": [],
+  "author": "Jorge Sousa",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "three": "^0.186.1"
+  }
+}
