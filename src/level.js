@@ -721,6 +721,7 @@ export const MAPS = [
 
 export function buildLevel(w, map) {
   w.data.fill(0);
+  w.burn?.fill(0);
   map.build(w);
 }
 

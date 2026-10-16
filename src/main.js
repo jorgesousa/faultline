@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from './world.js';
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
@@ -50,6 +55,75 @@ outerGround.rotation.x = -Math.PI / 2;
 outerGround.position.set(CENTER.x, G * VS - 0.02, CENTER.z);
 outerGround.receiveShadow = true;
 scene.add(outerGround);
+
+// ---------- sky occlusion volume ----------
+// A copy of the whole world as a 3D texture (one byte per voxel, mipmapped). Lit materials cone-trace it
+// to find how much open sky each point sees, so interiors go dark and light pours in through holes.
+const OCC_LUT = new Uint8Array(256);
+MAT.forEach((m, i) => { if (m) OCC_LUT[i] = m.shatter ? 40 : m.pat === 10 ? 140 : 255; });
+const occData = new Uint8Array(WX * WY * WZ);
+const occTex = new THREE.Data3DTexture(occData, WX, WZ, WY); // texel (x, z, y) matches world.idx
+Object.assign(occTex, {
+  format: THREE.RedFormat, type: THREE.UnsignedByteType, unpackAlignment: 1, generateMipmaps: true,
+  minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+});
+const occUniforms = {
+  occTex: { value: occTex },
+  occScale: { value: new THREE.Vector3(1 / (WX * VS), 1 / (WZ * VS), 1 / (WY * VS)) },
+  occOn: { value: 1 },
+};
+const SKYOCC_GLSL = /* glsl */ `
+uniform highp sampler3D occTex;
+uniform vec3 occScale;
+uniform float occOn;
+varying vec3 vWP;
+varying vec3 vWN;
+float occAt(vec3 p, float lod) {
+  vec3 t = p.xzy * occScale;
+  if (t.x < 0.0 || t.y < 0.0 || t.x > 1.0 || t.y > 1.0 || t.z > 1.0) return 0.0;
+  return textureLod(occTex, t, lod).r;
+}
+// one cone (about 30 degrees wide): coarser mip levels as it widens, out to ~25 m
+float occCone(vec3 p, vec3 d) {
+  float vis = 1.0, dist = 0.25;
+  for (int i = 0; i < 7; i++) {
+    float r = dist * 0.55;
+    vis *= 1.0 - occAt(p + d * dist, log2(max(r * 4.0, 1.0)));
+    dist += r * 1.5 + 0.1;
+  }
+  return vis;
+}
+float skyVis() {
+  if (occOn < 0.5) return 1.0;
+  vec3 n = normalize(vWN);
+  vec3 p = vWP + n * 0.2;
+  vec3 t = normalize(abs(n.y) < 0.9 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+  vec3 b = cross(n, t), up = vec3(0.0, 0.7, 0.0);
+  float v = occCone(p, normalize(n + up)) * 1.4;
+  v += occCone(p, normalize(n + t + up)) + occCone(p, normalize(n - t + up));
+  v += occCone(p, normalize(n + b + up)) + occCone(p, normalize(n - b + up));
+  return mix(0.12, 1.0, clamp(v / 5.4, 0.0, 1.0));
+}
+`;
+function patchSkyOcclusion(sh) {
+  Object.assign(sh.uniforms, occUniforms);
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nvarying vec3 vWN;')
+    .replace('#include <project_vertex>', `#include <project_vertex>
+  {
+    vec4 wp = vec4(transformed, 1.0);
+    vec3 wn = objectNormal;
+    #ifdef USE_INSTANCING
+      wp = instanceMatrix * wp;
+      wn = mat3(instanceMatrix) * wn;
+    #endif
+    vWP = (modelMatrix * wp).xyz;
+    vWN = mat3(modelMatrix) * wn;
+  }`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\n' + SKYOCC_GLSL)
+    .replace('#include <lights_fragment_end>', '#if defined( RE_IndirectDiffuse )\n  irradiance *= skyVis();\n#endif\n#include <lights_fragment_end>');
+}
 
 const voxelMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
 // Procedural surface detail (brick courses, stone blocks, roof tiles, boards, paving slabs, speckle)
@@ -150,6 +224,7 @@ vec3 surf(vec3 col) {
 }
 `;
 voxelMaterial.onBeforeCompile = (sh) => {
+  patchSkyOcclusion(sh);
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', '#include <common>\nattribute vec4 tp;\nvarying vec4 vTp;\nvarying vec3 vObjN;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTp = tp;\nvObjN = normal;');
@@ -168,6 +243,47 @@ function makeGeometry(a) {
   return g;
 }
 
+// ---------- post-processing: ambient occlusion, bloom, tone mapping ----------
+// Screen-space AO skips see-through things (smoke, water, beams) so they don't cast dark halos.
+class SolidAOPass extends GTAOPass {
+  _overrideVisibility() {
+    super._overrideVisibility();
+    const cache = this._visibilityCache;
+    this.scene.traverseVisible((o) => {
+      if (o.userData.noAO || (o.material && !Array.isArray(o.material) && o.material.transparent)) { o.visible = false; cache.push(o); }
+    });
+  }
+}
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.setSize(innerWidth, innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+const aoPass = new SolidAOPass(scene, camera, innerWidth, innerHeight, undefined,
+  { radius: 0.6, distanceExponent: 1.5, thickness: 1.5, scale: 1, samples: 12, distanceFallOff: 1 });
+aoPass.blendIntensity = 0.85;
+composer.addPass(aoPass);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.5, 0.92);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+const GFX = [
+  { name: 'High', ao: true, bloom: true, occ: true },
+  { name: 'Medium', ao: false, bloom: true, occ: true },
+  { name: 'Low', ao: false, bloom: false, occ: false },
+];
+let gfx = 0;
+function setGfx(i) {
+  gfx = (i + GFX.length) % GFX.length;
+  const g = GFX[gfx];
+  aoPass.enabled = g.ao;
+  bloomPass.enabled = g.bloom;
+  occUniforms.occOn.value = g.occ ? 1 : 0;
+  localStorage.setItem('vw-gfx', g.name);
+}
+setGfx(Math.max(0, GFX.findIndex((g) => g.name === localStorage.getItem('vw-gfx'))));
+function renderFrame(dt) {
+  if (GFX[gfx].ao || GFX[gfx].bloom) composer.render(dt);
+  else renderer.render(scene, camera);
+}
+
 // ---------- physics ----------
 const physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
 physics.timestep = 1 / 60;
@@ -182,6 +298,7 @@ const staticBody = physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
 // ---------- voxel world + chunks ----------
 const world = new VoxelWorld();
 const wget = (x, y, z) => world.get(x, y, z);
+const wburn = (x, y, z) => world.burn[(y * WZ + z) * WX + x];
 const chunks = Array.from({ length: NCX * NCY * NCZ }, () => ({ mesh: null, colliders: [] }));
 const dirty = new Set();
 const chunkOf = (x, y, z) => ((Math.floor(y / CS) * NCZ + Math.floor(z / CS)) * NCX + Math.floor(x / CS));
@@ -197,7 +314,7 @@ function rebuildChunk(ci) {
   const c = chunks[ci];
   const cx = ci % NCX, cz = Math.floor(ci / NCX) % NCZ, cy = Math.floor(ci / (NCX * NCZ));
   const x0 = cx * CS, y0 = cy * CS, z0 = cz * CS;
-  const a = buildGeometryArrays(wget, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0);
+  const a = buildGeometryArrays(wget, x0, y0, z0, x0 + CS, y0 + CS, z0 + CS, 0, 0, 0, 0, 0, 0, wburn);
   if (c.mesh) {
     c.mesh.geometry.dispose();
     scene.remove(c.mesh);
@@ -220,8 +337,37 @@ function rebuildChunk(ci) {
 }
 
 function flushDirty() {
-  for (const ci of dirty) rebuildChunk(ci);
+  if (!dirty.size) return;
+  const glTex = renderer.properties.get(occTex).__webglTexture;
+  const gl = renderer.getContext(), st = renderer.state;
+  if (glTex) {
+    st.bindTexture(gl.TEXTURE_3D, glTex);
+    st.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    st.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    st.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  }
+  for (const ci of dirty) {
+    rebuildChunk(ci);
+    if (glTex) uploadOccChunk(gl, ci);
+  }
+  if (glTex) gl.generateMipmap(gl.TEXTURE_3D);
   dirty.clear();
+}
+
+const occSub = new Uint8Array(CS * CS * CS);
+function uploadOccChunk(gl, ci) {
+  const x0 = (ci % NCX) * CS, z0 = (Math.floor(ci / NCX) % NCZ) * CS, y0 = Math.floor(ci / (NCX * NCZ)) * CS;
+  let k = 0;
+  for (let y = y0; y < y0 + CS; y++)
+    for (let z = z0; z < z0 + CS; z++)
+      for (let x = x0, i = (y * WZ + z) * WX + x0; x < x0 + CS; x++, i++) occSub[k++] = occData[i] = OCC_LUT[world.data[i]];
+  gl.texSubImage3D(gl.TEXTURE_3D, 0, x0, z0, y0, CS, CS, CS, gl.RED, gl.UNSIGNED_BYTE, occSub);
+}
+
+function uploadOccAll() {
+  for (let i = 0; i < occData.length; i++) occData[i] = OCC_LUT[world.data[i]];
+  occTex.needsUpdate = true;
+  renderer.initTexture(occTex);
 }
 
 // ---------- particles ----------
@@ -232,6 +378,7 @@ class Particles {
     const mat = soft
       ? new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.55, depthWrite: false })
       : lit ? new THREE.MeshLambertMaterial() : new THREE.MeshBasicMaterial();
+    if (lit || soft) mat.onBeforeCompile = patchSkyOcclusion;
     const geo = soft ? new THREE.IcosahedronGeometry(size / 2, 1) : new THREE.BoxGeometry(size, size, size);
     this.mesh = new THREE.InstancedMesh(geo, mat, max);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -394,9 +541,9 @@ function spawnFromWorld(list) {
     const x = c % WX, t = (c / WX) | 0, z = t % WZ, y = (t / WZ) | 0;
     mnx = Math.min(mnx, x); mny = Math.min(mny, y); mnz = Math.min(mnz, z);
     mxx = Math.max(mxx, x); mxy = Math.max(mxy, y); mxz = Math.max(mxz, z);
-    return [x, y, z, world.data[c]];
+    return [x, y, z, world.data[c], world.burn[c]];
   });
-  for (const c of list) world.data[c] = 0;
+  for (const c of list) { world.data[c] = 0; world.burn[c] = 0; }
   for (const [x, y, z, m] of cells) markDirty(x, y, z);
   if (cells.length <= 3) {
     destroyed += cells.length;
@@ -405,9 +552,14 @@ function spawnFromWorld(list) {
   }
   const dx = mxx - mnx + 1, dy = mxy - mny + 1, dz = mxz - mnz + 1;
   const grid = new Uint8Array(dx * dy * dz);
-  for (const [x, y, z, m] of cells) grid[((y - mny) * dz + (z - mnz)) * dx + (x - mnx)] = m;
+  let burn = null;
+  for (const [x, y, z, m, b] of cells) {
+    const i = ((y - mny) * dz + (z - mnz)) * dx + (x - mnx);
+    grid[i] = m;
+    if (b) (burn ??= new Uint8Array(grid.length))[i] = b;
+  }
   createDebris(grid, dx, dy, dz, [mnx, mny, mnz], new THREE.Vector3(mnx * VS, mny * VS, mnz * VS),
-    new THREE.Quaternion(), { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 });
+    new THREE.Quaternion(), { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, burn);
 }
 
 // ---------- debris (detached rigid bodies) ----------
@@ -415,7 +567,7 @@ const debris = [];
 const colliderOwner = new Map(); // collider handle -> debris | bomb
 const MAX_DEBRIS = 140;
 
-function createDebris(grid, dx, dy, dz, noff, frameOrigin, quat, linvel, angvel) {
+function createDebris(grid, dx, dy, dz, noff, frameOrigin, quat, linvel, angvel, burn = null) {
   const get = (x, y, z) => (x < 0 || y < 0 || z < 0 || x >= dx || y >= dy || z >= dz ? 0 : grid[(y * dz + z) * dx + x]);
   let n = 0, cx = 0, cy = 0, cz = 0, dens = 0;
   for (let y = 0; y < dy; y++) for (let z = 0; z < dz; z++) for (let x = 0; x < dx; x++) {
@@ -425,7 +577,8 @@ function createDebris(grid, dx, dy, dz, noff, frameOrigin, quat, linvel, angvel)
   }
   if (!n) return null;
   const com = new THREE.Vector3((cx / n) * VS, (cy / n) * VS, (cz / n) * VS);
-  const a = buildGeometryArrays(get, 0, 0, 0, dx, dy, dz, noff[0], noff[1], noff[2], -com.x, -com.y, -com.z);
+  const a = buildGeometryArrays(get, 0, 0, 0, dx, dy, dz, noff[0], noff[1], noff[2], -com.x, -com.y, -com.z,
+    burn && ((x, y, z) => burn[(y * dz + z) * dx + x]));
   const mesh = new THREE.Mesh(makeGeometry(a), voxelMaterial);
   mesh.castShadow = mesh.receiveShadow = true;
   scene.add(mesh);
@@ -434,7 +587,7 @@ function createDebris(grid, dx, dy, dz, noff, frameOrigin, quat, linvel, angvel)
     RAPIER.RigidBodyDesc.dynamic().setTranslation(t.x, t.y, t.z).setRotation(quat)
       .setLinvel(linvel.x, linvel.y, linvel.z).setAngvel(angvel).setCcdEnabled(n < 40)
   );
-  const deb = { grid, dx, dy, dz, noff, com, body, mesh, colliders: [], count: n, age: 0, impactCd: 0.25, prevVel: { ...linvel }, prevAng: { ...angvel } };
+  const deb = { grid, burn, dx, dy, dz, noff, com, body, mesh, colliders: [], count: n, age: 0, impactCd: 0.25, prevVel: { ...linvel }, prevAng: { ...angvel } };
   deb.radius = Math.hypot(dx, dy, dz) * VS * 0.5;
   for (const [bx, by, bz, ex, ey, ez] of greedyBoxes(get, 0, 0, 0, dx, dy, dz)) {
     const col = physics.createCollider(
@@ -539,19 +692,22 @@ function splitDebris(deb) {
       continue;
     }
     const ndx = mxx - mnx + 1, ndy = mxy - mny + 1, ndz = mxz - mnz + 1;
-    const ng = new Uint8Array(ndx * ndy * ndz);
+    const ng = new Uint8Array(ndx * ndy * ndz), nb = deb.burn && new Uint8Array(ng.length);
     for (const c of list) {
       const x = c % dx, t = (c / dx) | 0, z = t % dz, y = (t / dz) | 0;
-      ng[((y - mny) * ndz + (z - mnz)) * ndx + (x - mnx)] = grid[c];
+      const i = ((y - mny) * ndz + (z - mnz)) * ndx + (x - mnx);
+      ng[i] = grid[c];
+      if (nb) nb[i] = deb.burn[c];
     }
     const origin = new THREE.Vector3(mnx * VS, mny * VS, mnz * VS).applyQuaternion(quat).add(frameOrigin);
-    createDebris(ng, ndx, ndy, ndz, [deb.noff[0] + mnx, deb.noff[1] + mny, deb.noff[2] + mnz], origin, quat, lv, av);
+    createDebris(ng, ndx, ndy, ndz, [deb.noff[0] + mnx, deb.noff[1] + mny, deb.noff[2] + mnz], origin, quat, lv, av, nb);
   }
 }
 
 // ---------- destruction API ----------
-function destroyAt(p, r, power, glassMul = 2.2, end = null) {
+function destroyAt(p, r, power, glassMul = 2.2, end = null, scorchR = 0) {
   const removed = carveWorld(p, r, power, glassMul, end);
+  if (scorchR) scorch(p, scorchR);
   if (removed.length) {
     detachFloating(removed);
     for (const c of removed) pendingStructural.push(c);
@@ -687,8 +843,35 @@ function checkImpacts(dt) {
   }
 }
 
+// Blackens the exposed voxels a blast can see, strongest near its centre.
+function scorch(p, r) {
+  const vx = p.x / VS, vy = p.y / VS, vz = p.z / VS, R = r / VS, D = world.data, B = world.burn;
+  const visible = (x, y, z) => {
+    const tx = x + 0.5 - vx, ty = y + 0.5 - vy, tz = z + 0.5 - vz, n = Math.ceil(Math.hypot(tx, ty, tz) * 2);
+    for (let s = 1; s < n; s++) {
+      const k = s / n, cx = Math.floor(vx + tx * k), cy = Math.floor(vy + ty * k), cz = Math.floor(vz + tz * k);
+      if (cx === x && cy === y && cz === z) return true;
+      if (world.get(cx, cy, cz)) return false;
+    }
+    return true;
+  };
+  for (let y = Math.max(0, Math.floor(vy - R)); y <= Math.min(WY - 1, vy + R); y++)
+    for (let z = Math.max(0, Math.floor(vz - R)); z <= Math.min(WZ - 1, vz + R); z++)
+      for (let x = Math.max(0, Math.floor(vx - R)); x <= Math.min(WX - 1, vx + R); x++) {
+        const i = (y * WZ + z) * WX + x;
+        if (!D[i]) continue;
+        const d = Math.hypot(x + 0.5 - vx, y + 0.5 - vy, z + 0.5 - vz);
+        if (d > R) continue;
+        if (world.get(x + 1, y, z) && world.get(x - 1, y, z) && world.get(x, y + 1, z) && world.get(x, y - 1, z) && world.get(x, y, z + 1) && world.get(x, y, z - 1)) continue;
+        const v = Math.min(255, 255 * (1 - d / R) * 1.6 * (0.7 + 0.3 * Math.random())) | 0;
+        if (v <= B[i] || !visible(x, y, z)) continue;
+        B[i] = v;
+        dirty.add(chunkOf(x, y, z));
+      }
+}
+
 function explode(p, r = 2.2, push = 6, power = 3, color = 0xffb060) {
-  destroyAt(p, r, power, r > 2.5 ? 1.6 : 2.2);
+  destroyAt(p, r, power, r > 2.5 ? 1.6 : 2.2, null, r * 1.8);
   const R = r * 2.6;
   for (const deb of debris) {
     const t = deb.body.translation();
@@ -789,7 +972,7 @@ function launchProjectile(kind, speed) {
     mesh.add(brick, led);
     mesh.userData.led = led;
   } else if (kind === 'plasma') {
-    const core = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xffe0ff }));
+    const core = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffe0ff).multiplyScalar(3) }));
     core.scale.setScalar(0.12);
     const halo = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color: 0xb050ff, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
     halo.scale.setScalar(0.3);
@@ -949,7 +1132,7 @@ function fireRailgun() {
   const to = from.clone().addScaledVector(dir, hit ? RAIL_LEN : 0);
   const len = start.distanceTo(to);
   const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 8, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0x70f8ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0x70f8ff).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   mesh.position.copy(start).add(to).multiplyScalar(0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), _v.subVectors(to, start).normalize());
   scene.add(mesh);
@@ -1225,6 +1408,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetLevel();
   if (e.code === 'KeyT') setEnvironment(envIndex + 1);
   if (e.code === 'KeyL') { setTorch(!torchOn); toast(`Flashlight ${torchOn ? 'on' : 'off'}`, 1); }
+  if (e.code === 'KeyG') { setGfx(gfx + 1); toast(`Graphics: ${GFX[gfx].name}`, 1.2); }
   if (e.code === 'KeyM') { miniShown = !miniShown; localStorage.setItem('vw-minimap', miniShown ? 'on' : 'off'); toast(`Mini-map ${miniShown ? 'on' : 'off'}`, 1); }
   if (e.code === 'KeyF') { setDetector(!hunt.detector); toast(`Detector sound ${hunt.detector ? 'on' : 'off'}`, 1.2); }
 });
@@ -1485,6 +1669,8 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   initialDestructible = countDestructible(world);
   destroyed = 0;
   for (let i = 0; i < chunks.length; i++) rebuildChunk(i);
+  dirty.clear();
+  uploadOccAll();
   createItems(specs);
   miniDestroyed = -1;
   miniT = 0;
@@ -1552,6 +1738,7 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), new THREE.Shad
     }`,
 }));
 sky.renderOrder = -1;
+sky.userData.noAO = true;
 scene.add(sky);
 const stars = (() => {
   const n = 1400, pos = new Float32Array(n * 3);
@@ -1936,7 +2123,7 @@ function frame(now) {
   }
 
   updateEnvironment(dt);
-  renderer.render(scene, camera);
+  renderFrame(dt);
 
   frames++;
   fpsT += dt;
@@ -1953,6 +2140,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 resetLevel();
@@ -1963,6 +2151,8 @@ document.getElementById('loading').remove();
 // test hooks
 window.__game = {
   explode: (x, y, z, r) => explode(new THREE.Vector3(x, y, z), r),
+  gfx: (i) => { if (i !== undefined) setGfx(i); return GFX[gfx].name; },
+  burnAt: (x, y, z) => world.burn[world.idx(x, y, z)],
   stats: () => ({ impacts: impactCount, maxDv: +maxImpactDv.toFixed(1), debris: debris.length, destroyed, pct: (100 * destroyed) / initialDestructible, fps }),
   look: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); camera.lookAt(tx, ty, tz); player.body.setTranslation({ x, y: y - 0.62, z }, true); player.body.setNextKinematicTranslation({ x, y: y - 0.62, z }); player.vy = 0; player.kick.set(0, 0, 0); },
   use: (i) => { setTool(i); cooldown = 0; useTool(); },

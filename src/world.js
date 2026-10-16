@@ -59,6 +59,7 @@ export const MAT_RGB = MAT.map((m) => {
 export class VoxelWorld {
   constructor() {
     this.data = new Uint8Array(WX * WY * WZ);
+    this.burn = new Uint8Array(WX * WY * WZ); // scorch per voxel, 0–255
   }
   idx(x, y, z) {
     return (y * WZ + z) * WX + x;

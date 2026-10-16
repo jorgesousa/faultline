@@ -16,8 +16,9 @@ function noise(x, y, z) {
  * get(x,y,z) -> material id. Ranges are [x0,x1) etc.
  * (nox,noy,noz) offsets the colour noise so detached debris keeps its original look.
  * (px,py,pz) is added to every vertex position (metres).
+ * burn(x,y,z), when given, returns 0–255 scorch that blackens the voxel.
  */
-export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, px, py, pz) {
+export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, px, py, pz, burn = null) {
   const pos = [], nor = [], col = [], tp = [], idx = [];
   const p = [0, 0, 0], q = [0, 0, 0], vp = [0, 0, 0], ao = [0, 0, 0, 0];
   const solid = (r) => (get(r[0], r[1], r[2]) ? 1 : 0);
@@ -29,6 +30,7 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
         if (!m) continue;
         const base = MAT_RGB[m], pat = MAT_PAT[m];
         // patterned materials get their variation from the shader, so keep the per-voxel tint subtle
+        const sb = burn ? burn(x, y, z) / 255 : 0, keep = 1 - 0.9 * sb, soot = 0.012 * sb;
         const shade = (pat >= 1 && pat <= 5) || pat === 8 || pat === 9 || pat === 13 ? 0.94 + 0.06 * noise(x + nox, y + noy, z + noz) : 0.86 + 0.14 * noise(x + nox, y + noy, z + noz);
         for (const f of FACES) {
           p[0] = x; p[1] = y; p[2] = z;
@@ -54,7 +56,7 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
             const n0 = f.a === 0 ? f.s : 0, n1 = f.a === 1 ? f.s : 0, n2 = f.a === 2 ? f.s : 0;
             nor.push(n0, n1, n2);
             const b = AO_CURVE[a] * shade;
-            col.push(base[0] * b, base[1] * b, base[2] * b);
+            col.push(base[0] * b * keep + soot, base[1] * b * keep + soot * 0.85, base[2] * b * keep + soot * 0.7);
           }
           const flip = ao[0] + ao[2] < ao[1] + ao[3];
           if (f.s > 0) {

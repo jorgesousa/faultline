@@ -12,7 +12,7 @@ npm start          # serves on http://127.0.0.1:8931
 ## Controls
 
 WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
-1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · M mini-map · R restart · Esc pause
+1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · M mini-map · G graphics quality · R restart · Esc pause
 
 ## Loot hunt
 
@@ -60,6 +60,9 @@ Press `T` (or use the buttons in the menu) to change the time of day and weather
   - *Load paths* – support spreads up from the ground for free but costs 1 per sideways step. Voxels beyond their material's `span` (e.g. a broken bridge, an overhang) sag off.
   - *Balance* – at every horizontal cut, the centre of mass of everything above must sit over the cells crossing that cut. If not, the part above topples as one body (a water tower on one leg, a chimney with a notch cut in it).
   - *Load* – the weight above each cut must not exceed the `strength` of the cells crossing it. Otherwise those supports crumble and the part above drops (e.g. legs thinned with the hammer).
+- **Sky occlusion**: a copy of the world lives on the GPU as a mipmapped 3D texture (one byte per voxel; glass and leaves are partly see-through). Lit surfaces cone-trace it towards the sky, so interiors and alleys darken and daylight floods in through holes you blast. Edited chunks are re-uploaded as 16³ sub-blocks.
+- **Scorch marks**: explosions char exposed voxels within line of sight of the blast. The soot is stored per voxel, so it stays on chunks that later break off as debris.
+- **Post-processing**: screen-space ambient occlusion (GTAO, ignoring smoke, water and beams), bloom on the sun, moon, lamps, sparks and weapon glow, then ACES tone mapping. `G` cycles High (all), Medium (no SSAO) and Low (plain render, no sky occlusion) and is remembered.
 - **Impact damage**: when debris changes velocity sharply, including its spin, it carves at its strongest Rapier contact points. Heavier, faster hits do more damage and can break harder materials, so falling structures smash themselves and whatever they land on.
 
 ## Maps
