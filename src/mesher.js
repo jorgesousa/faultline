@@ -1,4 +1,4 @@
-import { VS, MAT_RGB } from './world.js';
+import { VS, MAT_RGB, MAT_PAT } from './world.js';
 
 const AO_CURVE = [0.45, 0.65, 0.82, 1.0];
 const FACES = [];
@@ -18,7 +18,7 @@ function noise(x, y, z) {
  * (px,py,pz) is added to every vertex position (metres).
  */
 export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, px, py, pz) {
-  const pos = [], nor = [], col = [], idx = [];
+  const pos = [], nor = [], col = [], tp = [], idx = [];
   const p = [0, 0, 0], q = [0, 0, 0], vp = [0, 0, 0], ao = [0, 0, 0, 0];
   const solid = (r) => (get(r[0], r[1], r[2]) ? 1 : 0);
 
@@ -27,8 +27,9 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
       for (let x = x0; x < x1; x++) {
         const m = get(x, y, z);
         if (!m) continue;
-        const base = MAT_RGB[m];
-        const shade = 0.86 + 0.14 * noise(x + nox, y + noy, z + noz);
+        const base = MAT_RGB[m], pat = MAT_PAT[m];
+        // patterned materials get their variation from the shader, so keep the per-voxel tint subtle
+        const shade = (pat >= 1 && pat <= 5) || pat === 8 || pat === 9 || pat === 13 ? 0.94 + 0.06 * noise(x + nox, y + noy, z + noz) : 0.86 + 0.14 * noise(x + nox, y + noy, z + noz);
         for (const f of FACES) {
           p[0] = x; p[1] = y; p[2] = z;
           p[f.a] += f.s;
@@ -49,6 +50,7 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
             if (f.s > 0) vp[f.a] += 1;
             vp[f.u] += cu; vp[f.v] += cv;
             pos.push(vp[0] * VS + px, vp[1] * VS + py, vp[2] * VS + pz);
+            tp.push(vp[0] + nox, vp[1] + noy, vp[2] + noz, pat);
             const n0 = f.a === 0 ? f.s : 0, n1 = f.a === 1 ? f.s : 0, n2 = f.a === 2 ? f.s : 0;
             nor.push(n0, n1, n2);
             const b = AO_CURVE[a] * shade;
@@ -68,6 +70,7 @@ export function buildGeometryArrays(get, x0, y0, z0, x1, y1, z1, nox, noy, noz, 
     pos: new Float32Array(pos),
     nor: new Float32Array(nor),
     col: new Float32Array(col),
+    tp: new Float32Array(tp),
     idx: new Uint32Array(idx),
   };
 }

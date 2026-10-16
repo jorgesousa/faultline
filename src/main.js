@@ -52,12 +52,110 @@ outerGround.receiveShadow = true;
 scene.add(outerGround);
 
 const voxelMaterial = new THREE.MeshLambertMaterial({ vertexColors: true });
+// Procedural surface detail (brick courses, stone blocks, roof tiles, boards, paving slabs, speckle)
+// drawn from each voxel's original grid position, so debris keeps its pattern.
+const SURFACE_GLSL = /* glsl */ `
+varying vec4 vTp;
+varying vec3 vObjN;
+float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vn(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
+}
+// 1 on a joint line at integer values of c, 0 elsewhere (anti-aliased)
+float jl(float c, float w) { float d = abs(fract(c + 0.5) - 0.5); return 1.0 - smoothstep(w, w + fwidth(c) * 1.5, d); }
+vec3 surf(vec3 col) {
+  int pat = int(vTp.w + 0.5);
+  if (pat == 0) return col;
+  vec3 n = abs(vObjN);
+  bool top = n.y > 0.5;
+  vec2 uv = n.x > 0.5 ? vTp.zy : (n.z > 0.5 ? vTp.xy : vTp.xz);
+  float fw = max(fwidth(uv.x), fwidth(uv.y));
+  float lum = dot(col, vec3(0.3, 0.59, 0.11));
+  float d4 = 1.0 - smoothstep(0.08, 0.22, fw); // detail at 4 lines per voxel
+  float d2 = 1.0 - smoothstep(0.15, 0.45, fw);
+  float d1 = 1.0 - smoothstep(0.3, 0.9, fw);
+  if (pat == 1) { // brick: 4 courses per voxel, stretcher bond
+    float r = uv.y * 4.0, ri = floor(r);
+    float b = uv.x * (top ? 2.0 : 1.0) + mod(ri, 2.0) * 0.5;
+    if (top) { r = uv.y * 2.0; ri = floor(r); b = uv.x + mod(ri, 2.0) * 0.5; }
+    float v = h21(vec2(floor(b), ri));
+    col *= mix(1.0, 0.8 + 0.34 * v + 0.08 * (vn(uv * 9.0) - 0.5), d4);
+    float m = max(jl(r, 0.09), jl(b, 0.035)) * d4;
+    col = mix(col, vec3(lum) * 1.25 + 0.035, m * 0.85);
+  } else if (pat == 2) { // stone: irregular ashlar blocks
+    float r = uv.y * 1.6, ri = floor(r);
+    float b = uv.x * 0.8 + h21(vec2(ri, 7.0));
+    float v = h21(vec2(floor(b), ri));
+    col *= mix(1.0, 0.78 + 0.36 * v, d2) * (0.92 + 0.16 * vn(uv * 5.0));
+    float m = max(jl(r, 0.05), jl(b, 0.03)) * d2;
+    col = mix(col, col * 0.55, m);
+  } else if (pat == 3) { // roof tiles: 3 rows per voxel, each row darker at its lower edge
+    float r = (top ? uv.y : uv.y) * 3.0, ri = floor(r);
+    float b = uv.x * 3.0 + mod(ri, 2.0) * 0.5;
+    float v = h21(vec2(floor(b), ri));
+    float g = top ? 1.0 : 0.72 + 0.28 * fract(r);
+    col *= mix(1.0, g * (0.82 + 0.3 * v), d4) * (0.9 + 0.2 * vn(uv * 0.7));
+    col = mix(col, col * 0.6, max(jl(r, 0.06), jl(b, 0.05)) * d4);
+  } else if (pat == 4) { // boards, 2 per voxel, with grain
+    float c = top ? uv.y : uv.x;
+    float along = top ? uv.x : uv.y;
+    float bi = floor(c * 2.0);
+    float v = h21(vec2(bi, floor(along * 0.25 + h21(vec2(bi, 1.0)))));
+    float grain = vn(vec2(c * 20.0, along * 1.5));
+    col *= mix(1.0, (0.84 + 0.26 * v) * (0.9 + 0.2 * grain), d2);
+    col = mix(col, col * 0.5, jl(c * 2.0, 0.05) * d2);
+  } else if (pat == 5) { // paving slabs, 50 cm
+    vec2 s = uv * 0.5;
+    float v = h21(floor(s));
+    col *= mix(1.0, 0.88 + 0.2 * v, d1) * (0.93 + 0.14 * vn(uv * 3.0));
+    if (top) col = mix(col, col * 0.7, max(jl(s.x, 0.02), jl(s.y, 0.02)) * d1);
+  } else if (pat == 6) { // grass
+    col *= 0.8 + 0.35 * vn(uv * 2.5) + 0.12 * (h21(floor(uv * 6.0)) - 0.5) * d4;
+    col = mix(col, col * vec3(1.18, 1.08, 0.7), smoothstep(0.55, 0.85, vn(uv * 0.15)));
+  } else if (pat == 7) { // asphalt
+    col *= 0.85 + 0.25 * vn(uv * 0.4) + 0.14 * (h21(floor(uv * 12.0)) - 0.5) * d4;
+  } else if (pat == 8) { // concrete: speckle, faint form-work panels
+    col *= 0.9 + 0.12 * vn(uv * 1.5) + 0.06 * (h21(floor(uv * 10.0)) - 0.5) * d4;
+    if (!top) col = mix(col, col * 0.8, max(jl(uv.x * 0.25, 0.01), jl(uv.y * 0.25, 0.01)) * d1);
+  } else if (pat == 9) { // render / plaster / paint
+    col *= 0.94 + 0.1 * vn(uv * 4.0) * d2 + 0.05 * vn(uv * 0.6);
+  } else if (pat == 10) { // foliage
+    col *= 0.6 + 0.7 * vn(uv * 3.0);
+  } else if (pat == 11) { // glass: soft diagonal reflections
+    float s = fract((uv.x + uv.y * 0.6) * 0.18);
+    col *= 0.8 + 0.35 * smoothstep(0.0, 0.25, s) * (1.0 - smoothstep(0.25, 0.6, s));
+  } else if (pat == 12) { // metal / paint: subtle scratches and rust
+    col *= 0.92 + 0.12 * vn(uv * vec2(1.0, 8.0));
+    col = mix(col, vec3(0.32, 0.13, 0.05) * (0.6 + lum), smoothstep(0.72, 0.9, vn(uv * 1.3)) * 0.35);
+  } else if (pat == 13) { // multi-pane window: white glazing bars on every voxel edge
+    float s = fract((uv.x + uv.y * 0.6) * 0.18);
+    col *= 0.8 + 0.35 * smoothstep(0.0, 0.25, s) * (1.0 - smoothstep(0.25, 0.6, s));
+    if (!top) col = mix(col, vec3(0.86, 0.85, 0.8), max(jl(uv.x, 0.07), jl(uv.y, 0.07)) * d1);
+  }
+  // weathering on walls: grime near the ground and rain streaks running down
+  if (!top && (pat == 1 || pat == 2 || pat == 4 || pat == 8 || pat == 9)) {
+    col *= mix(0.72, 1.0, smoothstep(4.0, 10.0, vTp.y));
+    col *= 1.0 - 0.14 * smoothstep(0.55, 0.95, vn(vec2(uv.x * 1.3, uv.y * 0.06))) * d1;
+  }
+  return col;
+}
+`;
+voxelMaterial.onBeforeCompile = (sh) => {
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec4 tp;\nvarying vec4 vTp;\nvarying vec3 vObjN;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTp = tp;\nvObjN = normal;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\n' + SURFACE_GLSL)
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = surf(diffuseColor.rgb);');
+};
 
 function makeGeometry(a) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(a.pos, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(a.nor, 3));
   g.setAttribute('color', new THREE.BufferAttribute(a.col, 3));
+  g.setAttribute('tp', new THREE.BufferAttribute(a.tp, 4));
   g.setIndex(new THREE.BufferAttribute(a.idx, 1));
   return g;
 }
@@ -220,7 +318,7 @@ function carveWorld(c, r, power, glassMul = 2.2, end = null) {
         const k = end ? Math.max(0, Math.min(1, (px * sx + py * sy + pz * sz) / sl)) : 0;
         const d = Math.hypot(px - sx * k, py - sy * k, pz - sz * k);
         const breakable = MAT[m].hard <= power;
-        if ((d <= vr && breakable) || (m === M.glass && d <= gr)) {
+        if ((d <= vr && breakable) || (MAT[m].shatter && d <= gr)) {
           world.data[i] = 0;
           removed.push(i);
           mats.push(m);
@@ -383,7 +481,7 @@ function carveDebris(deb, p, r, power) {
         const i = (y * dz + z) * dx + x, m = grid[i];
         if (!m) continue;
         const d = Math.hypot(x + 0.5 - vx, y + 0.5 - vy, z + 0.5 - vz);
-        if ((d <= vr && MAT[m].hard <= power) || (m === M.glass && d <= gr)) {
+        if ((d <= vr && MAT[m].hard <= power) || (MAT[m].shatter && d <= gr)) {
           grid[i] = 0;
           removed++;
           if (Math.random() < 0.35) {

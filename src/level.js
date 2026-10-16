@@ -3,8 +3,48 @@ import { WX, WZ, M, MAT } from './world.js';
 export const G = 4; // ground thickness in voxels (top of ground = 1 m)
 const H = 12; // storey height in voxels (3 m)
 
+// stone dressings on brick, painted trim on render
+const TRIM_FOR = () => ({ [M.brick]: M.stone, [M.darkbrick]: M.stone, [M.stone]: M.stone, [M.concrete]: M.concrete });
+
+/**
+ * A building with floors, stairs, windows and a pitched or flat roof, plus facade detail:
+ * window sills and lintels, string courses, a plinth, quoins, a door surround with a hood,
+ * gutters and downpipes, and optional bay window, dormers, window boxes and an open door.
+ * Options: wall, floor, win, roof, inner, column, flip (front on z1), sideWin, shop, doorW, doorH, doorX,
+ * winW, winH, winGap, winFront / winBack (offsets, or one list per storey), trim, plinth, groundMat,
+ * bay {u, w, d}, dormers [u], flowers, doorLeaf (material), pipeU, plain (no dressings).
+ */
 function building(w, x0, z0, W, D, stories, o) {
-  const x1 = x0 + W, z1 = z0 + D;
+  const x1 = x0 + W, z1 = z0 + D, top = G + stories * H;
+  const dress = !o.plain;
+  const trim = o.trim ?? TRIM_FOR()[o.wall] ?? M.trim;
+  // fill relative to a face: u runs along it, d is the distance outward from the wall plane (0 = the wall)
+  const ff = (f, u0, u1, y0, y1, d0, d1, m) => {
+    if (f === 'z0') w.fill(u0, y0, z0 - d1 + 1, u1, y1, z0 - d0 + 1, m);
+    else if (f === 'z1') w.fill(u0, y0, z1 - 1 + d0, u1, y1, z1 - 1 + d1, m);
+    else if (f === 'x0') w.fill(x0 - d1 + 1, y0, u0, x0 - d0 + 1, y1, u1, m);
+    else w.fill(x1 - 1 + d0, y0, u0, x1 - 1 + d1, y1, u1, m);
+  };
+  const front = o.flip ? 'z1' : 'z0', back = o.flip ? 'z0' : 'z1';
+  const detached = o.sideWin !== false;
+  const faces = detached ? [front, back, 'x0', 'x1'] : [front, back];
+  const lo = (f) => (f[0] === 'z' ? x0 : z0), hi = (f) => (f[0] === 'z' ? x1 : z1);
+  const ext = detached ? 1 : 0; // bands wrap round the corners of detached buildings
+  const ww = o.winW ?? 3, wh = o.winH ?? 5, gap = o.winGap ?? 4;
+  const doorW = o.doorW ?? 4, doorH = o.doorH ?? 10;
+  const dx = x0 + (o.doorX ?? Math.floor(W / 4));
+  const winList = (f, s) => {
+    const spec = f === front ? o.winFront : f === back ? o.winBack : null;
+    if (spec) return (Array.isArray(spec[0]) ? spec[s] ?? spec[spec.length - 1] : spec).map((u) => lo(f) + u);
+    if (f[0] === 'x' && !detached) return [];
+    const r = [];
+    for (let u = lo(f) + 3; u + ww <= hi(f) - 3; u += ww + gap) {
+      if (f === front && s === 0 && (o.shop || (u < dx + doorW + 1 && u + ww > dx - 1))) continue;
+      r.push(u);
+    }
+    return r;
+  };
+
   for (let s = 0; s < stories; s++) {
     const y0 = G + s * H;
     w.fill(x0, y0, z0, x1, y0 + 1, z1, o.floor);
@@ -12,35 +52,76 @@ function building(w, x0, z0, W, D, stories, o) {
     w.fill(x0, y0 + 1, z1 - 1, x1, y0 + H, z1, o.wall);
     w.fill(x0, y0 + 1, z0, x0 + 1, y0 + H, z1, o.wall);
     w.fill(x1 - 1, y0 + 1, z0, x1, y0 + H, z1, o.wall);
-    const ww = o.winW ?? 3, step = ww + (o.winGap ?? 4);
-    for (let x = x0 + 3; x + ww <= x1 - 3; x += step) {
-      w.fill(x, y0 + 4, z0, x + ww, y0 + 9, z0 + 1, o.win);
-      w.fill(x, y0 + 4, z1 - 1, x + ww, y0 + 9, z1, o.win);
-    }
-    for (let z = z0 + 3; o.sideWin !== false && z + ww <= z1 - 3; z += step) {
-      w.fill(x0, y0 + 4, z, x0 + 1, y0 + 9, z + ww, o.win);
-      w.fill(x1 - 1, y0 + 4, z, x1, y0 + 9, z + ww, o.win);
-    }
+    if (s === 0 && o.groundMat) ff(front, x0, x1, G + 1, G + H, 0, 1, o.groundMat);
+    for (const f of faces) for (const u of winList(f, s)) ff(f, u, u + ww, y0 + 4, y0 + 4 + wh, 0, 1, o.win);
     if (o.inner) {
       const mz = z0 + Math.floor(D / 2);
       w.fill(x0 + 1, y0 + 1, mz, x1 - 1, y0 + H, mz + 1, o.inner);
-      const dx = x0 + Math.floor(W / 2) - 2;
-      w.fill(dx, y0 + 1, mz, dx + 4, y0 + 10, mz + 1, 0);
+      const ix = x0 + Math.floor(W / 2) - 2;
+      w.fill(ix, y0 + 1, mz, ix + 4, y0 + 10, mz + 1, 0);
     }
     if (o.column) {
       for (const [cx, cz] of [[x0, z0], [x1 - 2, z0], [x0, z1 - 2], [x1 - 2, z1 - 2]])
         w.fill(cx, y0, cz, cx + 2, y0 + H, cz + 2, o.column);
     }
   }
-  // front door; `flip` puts the front on the z1 side
   const fz = o.flip ? z1 - 1 : z0, bz = o.flip ? z0 + 1 : z1 - 5;
+  const shopTop = o.shopTop ?? G + 10;
   if (o.shop) {
-    // big shop windows between brick piers on the ground floor
-    for (let x = x0 + 2; x + 8 <= x1 - 2; x += 10) w.fill(x, G + 2, fz, x + 8, G + 10, fz + 1, M.glass);
+    // big shop windows between piers on the ground floor
+    for (let x = x0 + 2; x + 8 <= x1 - 2; x += 10) {
+      w.fill(x, G + 2, fz, x + 8, shopTop, fz + 1, M.glass);
+      if (dress && x + 10 <= x1 - 2) ff(front, x + 8, x + 10, G + 1, shopTop, 1, 2, trim);
+    }
   }
-  const doorW = o.doorW ?? 4;
-  const dx = x0 + Math.floor(W / 4);
-  w.fill(dx, G + 1, fz, dx + doorW, G + (o.doorH ?? 10), fz + 1, 0);
+
+  if (dress) {
+    for (const f of faces) {
+      const a = lo(f) - ext, b = hi(f) + ext;
+      ff(f, a, b, G, G + 2, 1, 2, o.plinth ?? (o.wall === M.brick ? M.darkbrick : M.stone));
+      for (let s = 1; s < stories; s++) ff(f, a, b, G + s * H, G + s * H + 1, 1, 2, trim);
+      for (let s = 0; s < stories; s++) {
+        const y0 = G + s * H;
+        for (const u of winList(f, s)) {
+          ff(f, u - 1, u + ww + 1, y0 + 3, y0 + 4, 1, 2, trim); // sill
+          ff(f, u - 1, u + ww + 1, y0 + 4 + wh, y0 + 5 + wh, 0, 1, trim); // lintel
+          if (o.flowers && s > 0 && f === front) ff(f, u, u + ww, y0 + 4, y0 + 5, 1, 2, M.flower);
+        }
+      }
+    }
+    // quoins: alternating long and short blocks up the corners
+    if (detached && o.wall !== M.stone && o.wall !== M.concrete && o.wall !== M.wood) {
+      for (let y = G + 2, i = 0; y < top; y += 2, i++) {
+        const l = i % 2 ? 2 : 3, sh = i % 2 ? 3 : 2;
+        for (const f of ['z0', 'z1']) { ff(f, x0, x0 + l, y, y + 2, 0, 1, trim); ff(f, x1 - l, x1, y, y + 2, 0, 1, trim); }
+        for (const f of ['x0', 'x1']) { ff(f, z0, z0 + sh, y, y + 2, 0, 1, trim); ff(f, z1 - sh, z1, y, y + 2, 0, 1, trim); }
+      }
+    }
+    // door surround and hood
+    if (!o.shop) {
+      ff(front, dx - 1, dx + doorW + 1, G + 1, G + doorH + 1, 0, 1, trim);
+      if (doorH + 2 < H) ff(front, dx - 2, dx + doorW + 2, G + doorH + 1, G + doorH + 2, 1, 3, trim);
+    }
+  }
+  // front door: a step in the plinth, and optionally an open door leaf swung inside
+  w.fill(dx, G + 1, fz, dx + doorW, G + doorH + 1 - (dress && !o.shop ? 1 : 0), fz + 1, 0);
+  if (dress) ff(front, dx, dx + doorW, G + 1, G + 2, 1, 2, 0);
+  if (o.doorLeaf) ff(front, dx + doorW - 1, dx + doorW, G + 1, G + doorH, -4, 0, o.doorLeaf);
+
+  // bay window on the ground floor front
+  if (o.bay) {
+    const b0 = x0 + o.bay.u, b1 = b0 + o.bay.w, bd = o.bay.d ?? 3;
+    ff(front, b0, b1, G, G + 1, 1, bd + 1, o.floor);
+    ff(front, b0, b1, G + 1, G + 3, 1, bd + 1, o.wall);
+    ff(front, b0, b1, G + 3, G + 4, 1, bd + 2, trim);
+    ff(front, b0, b1, G + 4, G + 10, 1, bd + 1, M.pane);
+    ff(front, b0 + 1, b1 - 1, G + 1, G + 10, 1, bd, 0);
+    ff(front, b0 + 1, b1 - 1, G + 1, G + 10, 0, 1, 0);
+    for (const u of [b0, b1 - 1]) ff(front, u, u + 1, G + 4, G + 10, bd, bd + 1, trim);
+    ff(front, b0 - 1, b1 + 1, G + 10, G + 11, 1, bd + 2, trim);
+    ff(front, b0, b1, G + 11, G + 12, 1, bd + 1, o.roof ?? o.wall);
+  }
+
   // stairs along the back wall, one flight per storey
   for (let s = 0; s < stories - 1; s++) {
     const y0 = G + s * H, xs = x0 + 2;
@@ -48,7 +129,6 @@ function building(w, x0, z0, W, D, stories, o) {
     for (let i = 0; i < 12; i++) w.fill(xs + i, y0 + 1, bz, xs + i + 1, y0 + 2 + i, bz + 4, o.floor);
   }
   // roof
-  const top = G + stories * H;
   w.fill(x0, top, z0, x1, top + 1, z1, o.floor);
   if (o.roof) {
     let k = 0;
@@ -60,12 +140,75 @@ function building(w, x0, z0, W, D, stories, o) {
       w.fill(x1 - 1, y, z0 + 1 + k, x1, y + 1, z1 - 1 - k, o.wall);
     }
     w.fill(x0 - 1, top + 1 + k, z0 - 1 + k, x1 + 1, top + 2 + k, z1 + 1 - k, o.roof); // ridge cap
+    if (dress) {
+      for (const f of ['z0', 'z1']) {
+        ff(f, x0 - 1, x1 + 1, top, top + 1, 1, 2, M.metal); // gutter under the eaves
+        const pu = x0 + (o.pipeU ?? W - 2);
+        ff(f, pu, pu + 1, G + 2, top, 1, 2, M.metal); // downpipe
+      }
+      // dormer windows on the front slope
+      for (const du of o.dormers ?? []) {
+        const a = x0 + du, DW = 7;
+        ff(front, a, a + DW, top + 1, top + 10, -8, -2, o.wall);
+        ff(front, a + 1, a + DW - 1, top + 1, top + 10, -8, -3, 0);
+        ff(front, a + 2, a + DW - 2, top + 5, top + 9, -3, -2, M.pane);
+        ff(front, a + 1, a + DW - 1, top + 4, top + 5, -2, -1, trim);
+        ff(front, a - 1, a + DW + 1, top + 10, top + 11, -9, -1, o.roof);
+      }
+    }
   } else {
-    // flat roof with a parapet
+    // flat roof with a parapet, a cornice and coping
     w.fill(x0, top + 1, z0, x1, top + 3, z0 + 1, o.wall);
     w.fill(x0, top + 1, z1 - 1, x1, top + 3, z1, o.wall);
     w.fill(x0, top + 1, z0, x0 + 1, top + 3, z1, o.wall);
     w.fill(x1 - 1, top + 1, z0, x1, top + 3, z1, o.wall);
+    if (dress) for (const f of ['z0', 'z1', 'x0', 'x1']) {
+      ff(f, lo(f) - 1, hi(f) + 1, top, top + 1, 1, 2, trim);
+      ff(f, lo(f) - 1, hi(f) + 1, top + 3, top + 4, -1, 2, trim);
+    }
+  }
+}
+
+// 3×5 block letters for shop and pub signs
+const FONT = {
+  A: ['.#.', '#.#', '###', '#.#', '#.#'], B: ['##.', '#.#', '##.', '#.#', '##.'], C: ['###', '#..', '#..', '#..', '###'],
+  D: ['##.', '#.#', '#.#', '#.#', '##.'], E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'],
+  H: ['#.#', '#.#', '###', '#.#', '#.#'], I: ['###', '.#.', '.#.', '.#.', '###'], L: ['#..', '#..', '#..', '#..', '###'],
+  O: ['###', '#.#', '#.#', '#.#', '###'], P: ['###', '#.#', '###', '#..', '#..'], R: ['##.', '#.#', '##.', '#.#', '#.#'],
+  S: ['###', '#..', '###', '..#', '###'], T: ['###', '.#.', '.#.', '.#.', '.#.'], U: ['#.#', '#.#', '#.#', '#.#', '###'],
+  ' ': ['...', '...', '...', '...', '...'],
+};
+// sign board on a wall facing ±z (wall plane at z = zw, out = -1 or +1), 7 rows from y, raised letters centred
+function signBoard(w, xa, xb, y, zw, out, text, bg, fg) {
+  const zb = zw + out, zl = zw + 2 * out;
+  w.fill(xa, y, zb, xb, y + 7, zb + 1, bg);
+  const len = text.length * 4 - 1;
+  let x = Math.floor((xa + xb - len) / 2);
+  for (const ch of text) {
+    const g = FONT[ch] ?? FONT[' '];
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) {
+      if (g[r][c] !== '#') continue;
+      // a viewer facing a -z sign looks along +z, so +x is on their left: mirror it
+      const gx = out > 0 ? x + c : xa + xb - 1 - (x + c);
+      w.set(gx, y + 5 - r, zl, fg);
+    }
+    x += 4;
+  }
+}
+// striped canvas awning along x, attached under a sign
+function awning(w, xa, xb, y, zw, out, depth, m1, m2) {
+  for (let x = xa; x < xb; x++) {
+    const m = Math.floor((x - xa) / 2) % 2 ? m2 : m1;
+    for (let d = 1; d <= depth; d++) w.set(x, y, zw + d * out, m);
+    w.set(x, y - 1, zw + depth * out, m);
+  }
+}
+// chimney stack straddling a party wall, with pots
+function roofChimney(w, x, z, y0, y1) {
+  w.fill(x - 2, y0, z - 2, x + 2, y1, z + 2, M.brick);
+  w.fill(x - 3, y1 - 1, z - 3, x + 3, y1, z + 3, M.stone);
+  for (const px of [x - 1, x + 1]) {
+    w.fill(px - 1, y1, z - 1, px, y1 + 3, z, M.roof);
   }
 }
 
@@ -196,6 +339,21 @@ function church(w, x0, z0, W, D) {
     w.fill(x0 + 1 + k, y, z1 - 1, x1 - 1 - k, y + 1, z1, M.stone);
   }
   w.fill(x0 - 1 + k, top + k, z0 - 1, x1 + 1 - k, top + k + 1, z1 + 1, M.roof);
+  // stone cross on the front gable
+  w.fill(cx, top + k + 1, z0 - 1, cx + 1, top + k + 7, z0, M.stone);
+  w.fill(cx - 2, top + k + 4, z0 - 1, cx + 3, top + k + 5, z0, M.stone);
+  // buttresses between the nave windows
+  for (let z = z0 + 8; z + 2 <= z1 - 4; z += 7) {
+    w.fill(x0 - 2, G, z, x0, G + 12, z + 2, M.stone);
+    w.fill(x0 - 1, G + 12, z, x0, G + 18, z + 2, M.stone);
+    if (z >= z0 + 13) {
+      w.fill(x1, G, z, x1 + 2, G + 12, z + 2, M.stone);
+      w.fill(x1, G + 12, z, x1 + 1, G + 18, z + 2, M.stone);
+    }
+  }
+  // arched porch around the west door
+  w.fill(cx - 5, G, z0 - 1, cx + 5, G + 14, z0, M.stone);
+  w.fill(cx - 3, G + 1, z0 - 1, cx + 3, G + 12, z0, 0);
 
   // bell tower: shares the nave's side wall
   const tx0 = x1 - 1, tx1 = tx0 + 12, tz1 = z0 + 12;
@@ -212,6 +370,17 @@ function church(w, x0, z0, W, D) {
     w.fill(tx1 - 1, G + 34, b, tx1, G + 41, b + 2, 0);
   }
   for (let r = 0; tx0 - 1 + r < tx1 + 1 - r; r++) w.fill(tx0 - 1 + r, G + 44 + r, z0 - 1 + r, tx1 + 1 - r, G + 45 + r, tz1 + 1 - r, M.roof);
+  // clock face on the front of the tower
+  const ccx = tx0 + 6, ccy = G + 27;
+  for (let y = -3; y <= 3; y++) for (let x = -3; x <= 3; x++)
+    if (x * x + y * y <= 10) w.fill(ccx + x - 1, ccy + y, z0 - 1, ccx + x, ccy + y + 1, z0, M.trim);
+  w.fill(ccx - 1, ccy, z0 - 2, ccx, ccy + 3, z0 - 1, M.metal);
+  w.fill(ccx, ccy, z0 - 2, ccx + 2, ccy + 1, z0 - 1, M.metal);
+  w.fill(tx0, G, z0 - 1, tx1 + 1, G + 2, z0, M.stone);
+  w.fill(tx1, G, z0 - 1, tx1 + 1, G + 2, tz1 + 1, M.stone);
+  w.fill(tx0, G, tz1, tx1 + 1, G + 2, tz1 + 1, M.stone);
+  w.fill(tx0 + 4, G + 1, z0 - 1, tx0 + 8, G + 2, z0, 0);
+  w.fill(tx0 + 5, G + 51, z0 + 5, tx0 + 6, G + 55, z0 + 6, M.metal); // finial
   // the bell
   w.fill(tx0 + 5, G + 42, z0 + 5, tx0 + 7, G + 44, z0 + 7, M.metal);
   w.fill(tx0 + 4, G + 37, z0 + 4, tx0 + 8, G + 42, z0 + 8, M.metal);
@@ -249,7 +418,7 @@ function buildFarm(world) {
   w.fill(51, by + 1, 39, 52, by + 10, 43, 0);
   w.fill(72, by + 1, 39, 73, by + 10, 43, 0);
 
-  const barn = { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 10, doorH: 11, winW: 2, winGap: 8 };
+  const barn = { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 10, doorH: 11, winW: 2, winGap: 8, plain: true };
   building(w, 112, 26, 30, 26, 1, barn);
 
   waterTower(w, 32, 100);
@@ -304,12 +473,16 @@ function buildRiverside(w) {
   // north side: terraced houses with back gardens
   const facades = [M.brick, M.render, M.render2, M.brick, M.render3];
   facades.forEach((wall, i) => {
-    const x0 = 16 + 28 * i;
-    building(w, x0, 40, 29, 30, 2, { wall, floor: M.wood, inner: M.plaster, win: M.glass, roof: M.roof, flip: true, sideWin: false });
-    w.fill(x0 + 7, G, 70, x0 + 11, G + 1, 71, M.pavement);
+    const x0 = 16 + 28 * i, brick = wall === M.brick;
+    building(w, x0, 40, 29, 30, 2, {
+      wall, floor: M.wood, inner: M.plaster, win: M.pane, roof: i % 2 ? M.slate : M.roof, flip: true, sideWin: false,
+      winW: 4, doorX: 5, doorW: 5, winFront: [[], [5, 14, 21]], winBack: [4, 12, 20], bay: { u: 14, w: 12 },
+      dormers: i % 2 ? [15] : [], flowers: !brick, doorLeaf: brick ? M.paint : M.paint2,
+    });
     fenceZ(w, x0, 9, 40);
   });
   chimneyStack(w, 74, 52, G + 24, G + 43);
+  for (const x of [44, 100, 128]) roofChimney(w, x, 55, G + 30, G + 43);
   fenceZ(w, 156, 9, 40);
   fenceX(w, 16, 157, 8);
   shed(w, 50, 14);
@@ -318,19 +491,30 @@ function buildRiverside(w) {
   tree(w, 138, 18, 15, 5);
   tree(w, 24, 18, 14, 5);
   // corner shop with a flat above
-  building(w, 172, 44, 56, 26, 2, { wall: M.render2, floor: M.concrete, inner: M.plaster, win: M.glass, flip: true, shop: true, doorW: 6 });
-  w.fill(172, G + 11, 70, 228, G + 12, 74, M.paint); // awning
+  building(w, 172, 44, 56, 26, 2, { wall: M.render2, floor: M.concrete, inner: M.plaster, win: M.pane, flip: true, shop: true, shopTop: G + 9, doorW: 6, doorH: 8 });
+  signBoard(w, 174, 226, G + 9, 69, 1, 'FOOD STORE', M.sign, M.trim);
+  awning(w, 174, 226, G + 8, 69, 1, 4, M.paint, M.trim);
+  w.fill(180, G + 25, 50, 187, G + 29, 56, M.metal); // air conditioning units
+  w.fill(206, G + 25, 52, 211, G + 28, 57, M.metal);
   tree(w, 236, 24, 17, 6);
   tree(w, 160, 20, 16, 5);
 
   // south side: church, car park, pub, café
   church(w, 20, 116, 28, 34);
+  for (const z of [124, 131, 138, 145]) for (const x of [5, 12]) {
+    w.fill(x, G, z, x + 3, G + 4, z + 1, M.stone);
+    w.fill(x + 1, G + 4, z, x + 2, G + 5, z + 1, M.stone);
+  }
   w.fill(62, G - 1, 114, 92, G, 150, M.asphalt);
   car(w, 66, 124, false, M.paint);
   car(w, 80, 130, false, M.paint2);
-  building(w, 136, 116, 60, 32, 2, { wall: M.brick, floor: M.wood, inner: M.plaster, win: M.glass, roof: M.roof, doorW: 6 });
-  building(w, 204, 118, 32, 28, 1, { wall: M.render3, floor: M.concrete, win: M.glass, shop: true, doorW: 6 });
-  w.fill(204, G + 11, 114, 236, G + 12, 118, M.paint2);
+  building(w, 136, 116, 60, 32, 2, { wall: M.brick, floor: M.wood, inner: M.plaster, win: M.pane, roof: M.slate, doorW: 6, groundMat: M.sign });
+  signBoard(w, 160, 192, G + 9, 116, -1, 'THE BELL', M.wood, M.trim);
+  roofChimney(w, 142, 132, G + 28, G + 45);
+  building(w, 204, 118, 32, 28, 1, { wall: M.render3, floor: M.concrete, win: M.pane, shop: true, shopTop: G + 9, doorW: 6, doorH: 8 });
+  signBoard(w, 206, 234, G + 9, 118, -1, 'CAFE', M.sign, M.trim);
+  awning(w, 205, 235, G + 8, 118, -1, 4, M.paint2, M.trim);
+  w.fill(214, G + 13, 126, 220, G + 16, 132, M.metal);
   bench(w, 212, 108, G + 1);
   // parked cars along the kerb
   car(w, 20, 79, true, M.paint2);
@@ -338,11 +522,12 @@ function buildRiverside(w) {
   car(w, 180, 98, true, M.paint2);
 
   // across the river: boathouse on stilts, fishing pier, a house and the park
-  building(w, 60, 184, 28, 28, 1, { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 12, doorH: 10, winW: 2, winGap: 6, flip: true });
+  building(w, 60, 184, 28, 28, 1, { wall: M.wood, floor: M.planks, win: M.glass, roof: M.roof, doorW: 12, doorH: 10, winW: 2, winGap: 6, flip: true, plain: true });
   for (const z of [184, 190]) for (const x of [60, 67, 74, 81, 86]) w.fill(x, 1, z, x + 2, G, z + 2, M.wood);
   w.fill(200, G, 166, 207, G + 1, R.river[1], M.planks);
   for (const z of [166, 174, 182, 189]) for (const x of [200, 205]) w.fill(x, 1, z, x + 2, G, z + 2, M.wood);
-  building(w, 12, 212, 32, 28, 2, { wall: M.render3, floor: M.wood, inner: M.plaster, win: M.glass, roof: M.roof });
+  building(w, 12, 212, 32, 28, 2, { wall: M.render3, floor: M.wood, inner: M.plaster, win: M.pane, roof: M.slate, flowers: true, doorLeaf: M.paint });
+  roofChimney(w, 38, 226, G + 30, G + 42);
   fenceX(w, 10, 46, 244);
   for (const [x, z, h] of [[150, 214, 18], [236, 214, 16], [150, 244, 15], [236, 246, 19], [208, 238, 14], [56, 236, 17]]) tree(w, x, z, h, 6);
   w.fill(180, G, 224, 188, G + 6, 232, M.stone); // statue plinth
@@ -354,12 +539,12 @@ function buildRiverside(w) {
 }
 
 const RIVERSIDE_LAMPS = [
-  [40, G + 18, 76], [120, G + 18, 76], [80, G + 18, 108], [180, G + 18, 108],
+  [44, G + 18, 76], [128, G + 18, 76], [80, G + 18, 108], [180, G + 18, 108],
   [60, G + 18, 156], [170, G + 18, 156], [103, G + 17, 177], [150, G + 18, 202],
   [166, G + 12, 124], [196, G + 12, 56],
 ];
 function riversideLamps(w) {
-  streetLamp(w, 40, 72, 0, 1); streetLamp(w, 120, 72, 0, 1);
+  streetLamp(w, 44, 72, 0, 1); streetLamp(w, 128, 72, 0, 1);
   streetLamp(w, 80, 112, 0, -1); streetLamp(w, 180, 112, 0, -1);
   streetLamp(w, 60, 152, 0, 1); streetLamp(w, 170, 152, 0, 1);
   streetLamp(w, 99, 177, 1, 0, G); streetLamp(w, 150, 198, 0, 1);
