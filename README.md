@@ -1,4 +1,6 @@
-# Voxel Wrecker
+# FAULTLINE
+
+*A world that changes when you act.*
 
 A small browser voxel-destruction game: a **loot hunt** against the clock in a fully destructible town. Built with Three.js (rendering) and Rapier (physics).
 
@@ -12,7 +14,14 @@ npm start          # serves on http://127.0.0.1:8931
 ## Controls
 
 WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
-1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · M mini-map · G graphics quality · R restart · Esc pause
+1–7 or wheel switch weapon · F detector sound · T environment · L flashlight · M mini-map · G graphics quality · R restart · Esc pause · Enter play (on the menu)
+
+## Menu
+
+- The title screen sits over a live view of the town: the camera circles it and demolition charges go off every few seconds. Starting a run rebuilds anything the demo knocked down.
+- From the menu you can pick the map, light and weather, graphics quality and detector sound, see the best times and read how to play.
+- The same screen is used for pause (with time, loot and destruction so far, and Restart) and for the finish screen (your result and the leaderboard).
+- Identity: charcoal and bone with an ember accent, a fractured "F" mark, Barlow Condensed for display type, JetBrains Mono for labels and Inter Tight for text (fonts come from `@fontsource`, installed by `npm install`). Code: `index.html`, `style.css`, `src/menu.js`.
 
 ## Loot hunt
 
@@ -21,8 +30,8 @@ WASD move · Shift sprint · Space jump · Mouse look · Left click use tool
 - Each map also has fixed hiding places (e.g. the church bell tower, a car boot, a statue plinth, a sealed attic, the water tower tank).
 - Loot items are physics bodies: they fall with collapsing floors, ride toppling structures and get thrown by blasts and tool hits. Lost items return to where they started.
 - Walk over loot to collect it. The detector bar (and clicking sound) gets hotter near the closest item.
-- No time limit: a stopwatch runs (paused while the game is paused) until every item is found. The 10 fastest times per map are kept in a leaderboard (saved in the browser) shown on the start and finish screens.
-- The detector sound can be switched off with `F` or the button on the menu; the choice is remembered.
+- No time limit: a stopwatch runs (paused while the game is paused) until every item is found. The 10 fastest times per map are kept in a leaderboard (saved in the browser) shown in the menu under Best times.
+- The detector sound can be switched off with `F` or the Detector chip on the menu; the choice is remembered.
 
 ## Weapons
 

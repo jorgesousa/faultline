@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createMenu } from './menu.js';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VS, WX, WY, WZ, CS, NCX, NCY, NCZ, MAT, MAT_RGB, M, VoxelWorld } from './world.js';
 import { buildGeometryArrays, greedyBoxes } from './mesher.js';
@@ -1215,8 +1216,9 @@ const items = [];
 const hunt = { seed: 1, time: 0, points: 0, found: 0, total: 0, maxPoints: 0, over: false, started: false, detector: localStorage.getItem('vw-detector') !== 'off', tick: 0 };
 const sparkle = new Particles(400, 0.06, { gravity: -0.5, drag: 1.5, lit: false });
 
-let audio = null;
+let audio = null, muted = false;
 function beep(freq, dur = 0.08, vol = 0.05, type = 'sine', at = 0) {
+  if (muted) return;
   try {
     audio ??= new AudioContext();
     const t = audio.currentTime + at, o = audio.createOscillator(), g = audio.createGain();
@@ -1328,24 +1330,27 @@ function toast(html, secs = 2.5) {
 const fmtTime = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 let mapIndex = Math.max(0, MAPS.findIndex((m) => m.id === localStorage.getItem('vw-map')));
 // the farm keeps the original key so earlier times survive
-const boardKey = () => (MAPS[mapIndex].id === 'farm' ? 'vw-leaderboard' : `vw-leaderboard-${MAPS[mapIndex].id}`);
-function loadBoard() {
-  try { return JSON.parse(localStorage.getItem(boardKey())) ?? []; } catch { return []; }
+const boardKey = (i = mapIndex) => (MAPS[i].id === 'farm' ? 'vw-leaderboard' : `vw-leaderboard-${MAPS[i].id}`);
+function loadBoard(i = mapIndex) {
+  try { return JSON.parse(localStorage.getItem(boardKey(i))) ?? []; } catch { return []; }
 }
+const bestTime = (i) => { const b = loadBoard(i); return b.length ? fmtTime(b[0].time) : null; };
 function renderBoard(highlight) {
   const board = loadBoard();
   const html = board.length
-    ? `<table>${board.map((r, i) => `<tr class="${r.at === highlight ? 'me' : ''}"><td>${i + 1}.</td><td><b>${fmtTime(r.time)}</b></td>` +
+    ? `<table>${board.map((r, i) => `<tr class="${r.at === highlight ? 'me' : ''}"><td>${String(i + 1).padStart(2, '0')}</td><td><b>${fmtTime(r.time)}</b></td>` +
       `<td>${new Date(r.at).toLocaleDateString()} ${new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td><td>${r.destruction}% destroyed</td></tr>`).join('')}</table>`
-    : '<p class="empty">No results yet. Find all the loot to set the first time!</p>';
+    : '<p class="empty">No results yet. Find all the loot to set the first time.</p>';
   document.querySelectorAll('.board').forEach((el) => (el.innerHTML = html));
-  document.querySelectorAll('.board-title').forEach((el) => (el.textContent = `🏆 Best times · ${MAPS[mapIndex].name.replace(/^\S+\s/, '')}`));
+  document.querySelectorAll('.board-title').forEach((el) => (el.textContent = `${MAPS[mapIndex].name.replace(/^\S+\s/, '')} · top 10`));
 }
+
+let menuUi = null;
 
 function setDetector(on) {
   hunt.detector = on;
   localStorage.setItem('vw-detector', on ? 'on' : 'off');
-  document.querySelectorAll('.sound-toggle').forEach((b) => (b.textContent = on ? '🔊 Detector sound: on' : '🔇 Detector sound: off'));
+  menuUi?.sync();
 }
 
 function endHunt() {
@@ -1355,13 +1360,10 @@ function endHunt() {
   const board = [...loadBoard(), entry].sort((a, b) => a.time - b.time).slice(0, 10);
   localStorage.setItem(boardKey(), JSON.stringify(board));
   const rank = board.indexOf(entry) + 1;
-  hud.endTitle.textContent = 'All loot found!';
-  hud.endBody.innerHTML = `Your time <b style="font-size:22px">${fmtTime(hunt.time)}</b> · ${hunt.points} points` +
-    (rank ? `<br><span style="color:#ffb347">${rank === 1 ? 'New record!' : `#${rank} on the leaderboard`}</span>` : '<br>Not in the top 10 this time');
-  renderBoard(rank ? entry.at : null);
+  menuUi.setResult({ time: fmtTime(hunt.time), points: hunt.points, rank, destruction: entry.destruction, at: rank ? entry.at : null });
   [0, 0.12, 0.24, 0.4].forEach((at, i) => beep(520 * Math.pow(1.19, i), 0.25, 0.08, 'triangle', at));
   if (controls.isLocked) controls.unlock();
-  else showOverlay();
+  else menuUi.show('end');
 }
 
 function updateHunt(dt) {
@@ -1408,7 +1410,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') resetLevel();
   if (e.code === 'KeyT') setEnvironment(envIndex + 1);
   if (e.code === 'KeyL') { setTorch(!torchOn); toast(`Flashlight ${torchOn ? 'on' : 'off'}`, 1); }
-  if (e.code === 'KeyG') { setGfx(gfx + 1); toast(`Graphics: ${GFX[gfx].name}`, 1.2); }
+  if (e.code === 'KeyG') { setGfx(gfx + 1); menuUi?.sync(); toast(`Graphics: ${GFX[gfx].name}`, 1.2); }
   if (e.code === 'KeyM') { miniShown = !miniShown; localStorage.setItem('vw-minimap', miniShown ? 'on' : 'off'); toast(`Mini-map ${miniShown ? 'on' : 'off'}`, 1); }
   if (e.code === 'KeyF') { setDetector(!hunt.detector); toast(`Detector sound ${hunt.detector ? 'on' : 'off'}`, 1.2); }
 });
@@ -1598,7 +1600,6 @@ addEventListener('wheel', (e) => setTool((tool + (e.deltaY > 0 ? 1 : TOOLS.lengt
 
 // ---------- HUD ----------
 const hud = {
-  overlay: document.getElementById('overlay'),
   stats: document.getElementById('stats'),
   toolbar: document.getElementById('toolbar'),
   hunt: document.getElementById('hunt'),
@@ -1606,10 +1607,6 @@ const hud = {
   signalFill: document.querySelector('#signal i'),
   signalText: document.querySelector('#signal span'),
   signalSound: document.querySelector('#signal em'),
-  intro: document.getElementById('intro'),
-  end: document.getElementById('end'),
-  endTitle: document.querySelector('#end h1'),
-  endBody: document.querySelector('#end p'),
 };
 // 24×24 line icons for the hotbar
 const TOOL_ICONS = [
@@ -1634,21 +1631,9 @@ function updateToolbar(dt) {
   const cd = TOOLS[tool].cooldown;
   toolSlots[tool].querySelector('i').style.height = `${Math.max(0, cooldown / cd) * 100}%`;
 }
-controls.addEventListener('lock', () => (hud.overlay.style.display = 'none'));
-function showOverlay() {
-  hud.overlay.style.display = 'flex';
-  hud.intro.style.display = hunt.over ? 'none' : 'block';
-  hud.end.style.display = hunt.over ? 'block' : 'none';
-}
-controls.addEventListener('unlock', showOverlay);
-document.querySelectorAll('.sound-toggle').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); setDetector(!hunt.detector); }));
-setDetector(hunt.detector);
-renderBoard();
-hud.overlay.addEventListener('click', (e) => {
-  if (e.target.closest('.board')) return;
-  if (hunt.over) resetLevel();
-  controls.lock();
-});
+const menuStateNow = () => (hunt.over ? 'end' : hunt.started ? 'pause' : 'title');
+controls.addEventListener('lock', () => menuUi.hide());
+controls.addEventListener('unlock', () => menuUi.show(menuStateNow()));
 
 // ---------- level lifecycle ----------
 function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
@@ -1675,8 +1660,9 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
   miniDestroyed = -1;
   miniT = 0;
   Object.assign(hunt, { seed, time: 0, points: 0, found: 0, over: false, started: false });
-  hud.intro.style.display = 'block';
-  hud.end.style.display = 'none';
+  demo.dirty = false;
+  demo.blasts = 0;
+  menuUi?.sync();
   player.body.setTranslation({ x: SPAWN.x, y: SPAWN.y, z: SPAWN.z }, true);
   player.vy = 0;
   player.kick.set(0, 0, 0);
@@ -1687,10 +1673,7 @@ function resetLevel(seed = (Math.random() * 2 ** 31) | 0) {
 function setMap(i) {
   mapIndex = (i + MAPS.length) % MAPS.length;
   localStorage.setItem('vw-map', MAPS[mapIndex].id);
-  document.querySelectorAll('.map-btn').forEach((b) => b.classList.toggle('on', +b.dataset.i === mapIndex));
-  document.querySelectorAll('.map-desc').forEach((el) => (el.textContent = MAPS[mapIndex].desc));
   resetLevel();
-  renderBoard();
 }
 
 
@@ -1932,7 +1915,7 @@ function setEnvironment(i, quiet = false) {
   localStorage.setItem('vw-env', ENVS[envIndex].id);
   lastAutoTorch = null;
   envBlend = 0;
-  document.querySelectorAll('.env-btn:not(.map-btn)').forEach((b) => b.classList.toggle('on', +b.dataset.i === envIndex));
+  menuUi?.sync();
   if (!quiet) toast(ENVS[envIndex].name, 1.4);
 }
 
@@ -2055,16 +2038,90 @@ function updateEnvironment(dt) {
 }
 const _c = new THREE.Color();
 let frameNo = 0;
-document.querySelectorAll('.maps').forEach((box) => {
-  box.innerHTML = MAPS.map((m, i) => `<button class="env-btn map-btn${i === mapIndex ? ' on' : ''}" data-i="${i}">${m.name}</button>`).join('');
-  box.addEventListener('click', (ev) => { ev.stopPropagation(); const b = ev.target.closest('.map-btn'); if (b && +b.dataset.i !== mapIndex) setMap(+b.dataset.i); });
-});
-document.querySelectorAll('.map-desc').forEach((el) => (el.textContent = MAPS[mapIndex].desc));
-document.querySelectorAll('.envs:not(.maps)').forEach((box) => {
-  box.innerHTML = ENVS.map((e, i) => `<button class="env-btn" data-i="${i}">${e.name}</button>`).join('');
-  box.addEventListener('click', (ev) => { ev.stopPropagation(); const b = ev.target.closest('.env-btn'); if (b) setEnvironment(+b.dataset.i, true); });
-});
 setEnvironment(envIndex, true);
+
+// ---------- menu: live attract mode behind it ----------
+// On the title and finish screens the camera circles the town while charges go off now and then.
+// Playing from a demolished town rebuilds it first.
+const demo = { ang: Math.random() * Math.PI * 2, next: 2.5, blasts: 0, dirty: false, offset: -0.17, mx: 0, my: 0, was: false };
+addEventListener('mousemove', (e) => {
+  if (controls.isLocked) return;
+  demo.mx = e.clientX / innerWidth - 0.5;
+  demo.my = e.clientY / innerHeight - 0.5;
+});
+const _demoFwd = new THREE.Vector3(), _demoP = new THREE.Vector3();
+function pickDemoTarget() {
+  camera.getWorldDirection(_demoFwd);
+  const cx = WX / 2, cz = WZ / 2;
+  for (let k = 0; k < 60; k++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 64;
+    const x = Math.floor(cx + Math.cos(a) * r), z = Math.floor(cz + Math.sin(a) * r);
+    if (x < 2 || z < 2 || x >= WX - 2 || z >= WZ - 2) continue;
+    let top = WY - 1;
+    while (top > 0 && !world.get(x, top, z)) top--;
+    if (top * VS < 3.5) continue;
+    const y = 4 + Math.floor(Math.random() * (top - 6));
+    _demoP.set((x + 0.5) * VS, (y + 0.5) * VS, (z + 0.5) * VS);
+    const d = _demoP.clone().sub(camera.position);
+    const dist = d.length();
+    if (dist < 12 || dist > 42 || d.normalize().dot(_demoFwd) < 0.8) continue;
+    return _demoP.clone();
+  }
+  return null;
+}
+function updateDemo(dt, now) {
+  const st = menuUi.state();
+  const on = !controls.isLocked && (st === 'title' || st === 'end');
+  if (!on) {
+    if (demo.was) { camera.clearViewOffset(); demo.was = false; }
+    muted = false;
+    return;
+  }
+  if (!demo.was) viewmodels.forEach((v) => (v.visible = false));
+  demo.was = true;
+  muted = true;
+  demo.ang += dt * 0.05;
+  const cx = (WX * VS) / 2, cz = (WZ * VS) / 2, r = 34;
+  camera.position.set(cx + Math.cos(demo.ang) * r, 19 + Math.sin(now * 0.00025) * 2, cz + Math.sin(demo.ang) * r);
+  camera.lookAt(cx + demo.mx * 4, 3.5 - demo.my * 3, cz);
+  demo.offset += ((menuUi.panelOpen() ? 0.12 : -0.17) - demo.offset) * Math.min(1, dt * 3);
+  camera.setViewOffset(innerWidth, innerHeight, demo.offset * innerWidth, 0, innerWidth, innerHeight);
+  if (st !== 'title') return;
+  demo.next -= dt;
+  if (demo.next <= 0) {
+    demo.next = 4 + Math.random() * 3.5;
+    if (demo.blasts >= 9) {
+      demo.blasts = 0;
+      menuUi.fade(() => resetLevel());
+      return;
+    }
+    const p = debris.length < 45 && pickDemoTarget();
+    if (p) {
+      explode(p, 2.3 + Math.random() * 1.3);
+      demo.dirty = true;
+      demo.blasts++;
+      menuUi.quake();
+    }
+  }
+}
+function enterGame() {
+  const st = menuUi.state();
+  if (!st) return false;
+  if (st === 'end' || (st === 'title' && demo.dirty)) resetLevel();
+  else if (st === 'title') {
+    const t = player.body.translation();
+    camera.position.set(t.x, t.y + 0.62, t.z);
+    camera.rotation.set(0, spawnYaw, 0);
+  }
+  camera.clearViewOffset();
+  demo.was = false;
+  muted = false;
+  viewmodels.forEach((v, j) => (v.visible = j === tool));
+  return true;
+}
+function play() {
+  if (enterGame()) controls.lock();
+}
 
 // ---------- main loop ----------
 let shake = 0, acc = 0, last = performance.now(), fpsT = 0, frames = 0, fps = 0;
@@ -2101,6 +2158,7 @@ function frame(now) {
   smoke.update(dt);
   updateItems(dt);
   updateHunt(dt);
+  updateDemo(dt, now);
 
   flash.intensity *= Math.exp(-dt * 12);
   beam.material.opacity *= Math.exp(-dt * 14);
@@ -2143,14 +2201,32 @@ addEventListener('resize', () => {
   composer.setSize(innerWidth, innerHeight);
 });
 
+menuUi = createMenu({
+  maps: MAPS, envs: ENVS,
+  mapIndex: () => mapIndex, envIndex: () => envIndex,
+  setMap, setEnv: (i) => setEnvironment(i, true),
+  gfxName: () => GFX[gfx].name, setGfx: (i) => setGfx(i < 0 ? gfx + 1 : i),
+  detector: () => hunt.detector, toggleDetector: () => setDetector(!hunt.detector),
+  bestTime, renderBoard,
+  huntInfo: () => ({ time: fmtTime(hunt.time), found: hunt.found, total: hunt.total, destruction: ((100 * destroyed) / initialDestructible).toFixed(1) }),
+  play,
+  restart: () => { resetLevel(); play(); },
+});
 resetLevel();
 setTool(0);
 requestAnimationFrame(frame);
-document.getElementById('loading').remove();
+menuUi.show('title');
+const loadingEl = document.getElementById('loading');
+loadingEl.classList.add('done');
+setTimeout(() => loadingEl.remove(), 800);
 
 // test hooks
 window.__game = {
   explode: (x, y, z, r) => explode(new THREE.Vector3(x, y, z), r),
+  menu: (on) => (on ? menuUi.show(menuStateNow()) : (enterGame(), menuUi.hide())),
+  menuState: () => menuUi.state(),
+  menuShow: (st, r) => { if (r) menuUi.setResult(r); menuUi.show(st); },
+  play: () => play(),
   gfx: (i) => { if (i !== undefined) setGfx(i); return GFX[gfx].name; },
   burnAt: (x, y, z) => world.burn[world.idx(x, y, z)],
   stats: () => ({ impacts: impactCount, maxDv: +maxImpactDv.toFixed(1), debris: debris.length, destroyed, pct: (100 * destroyed) / initialDestructible, fps }),
