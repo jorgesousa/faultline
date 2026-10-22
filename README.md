@@ -4,12 +4,22 @@
 
 A small browser voxel-destruction game: a **loot hunt** against the clock in a fully destructible town. Built with Three.js (rendering) and Rapier (physics).
 
+**▶ Play: [jorgesousa.github.io/faultline](https://jorgesousa.github.io/faultline/)** (desktop browser, keyboard and mouse)
+
+An idea by Francisco and Daniel Sousa, part of **[Sousa Lab](https://jorgesousa.github.io/sousa-lab/)**.
+
 ## Run
 
 ```bash
 npm install
 npm start          # serves on http://127.0.0.1:8931
 ```
+
+There is no build step. `index.html` maps `three` and Rapier to `node_modules/` with an import map, so any static file server works once `npm install` has run.
+
+## Deploy
+
+Every push to `main` publishes the game to GitHub Pages ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)). The workflow runs `npm ci` and uploads the game files together with `node_modules/`.
 
 ## Controls
 
@@ -82,6 +92,11 @@ Pick a map on the start menu (remembered between visits). Maps are built procedu
 - **Old farm**: the original brick house, concrete tower with steel columns, footbridge, wooden barn, water tower on stilts, brick chimney and ruined arch wall, now with a country road, fences and trees.
 
 To add a map, write a `build(w)` function and add an entry to `MAPS`.
+
+## Credits
+
+- Idea: **Francisco Sousa** and **Daniel Sousa**
+- Made by **Jorge Sousa**, with GitHub Copilot
 
 ## License
 
