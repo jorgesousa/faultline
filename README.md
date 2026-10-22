@@ -93,6 +93,11 @@ Pick a map on the start menu (remembered between visits). Maps are built procedu
 
 To add a map, write a `build(w)` function and add an entry to `MAPS`.
 
+## More docs
+
+- [docs/DESIGN.md](docs/DESIGN.md): design decisions, identity, architecture and how to check changes
+- [.github/copilot-instructions.md](.github/copilot-instructions.md): project rules for GitHub Copilot
+
 ## Credits
 
 - Idea: **Francisco Sousa** and **Daniel Sousa**
